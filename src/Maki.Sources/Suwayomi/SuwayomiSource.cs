@@ -187,7 +187,7 @@ public sealed partial class SuwayomiSource(
         string? pagesFor;
         try
         {
-            (pages, pagesFor) = await client.FetchPagesAsync(id, ct);
+            (pages, pagesFor) = await PagesAsync(id, ct);
         }
         catch (SuwayomiGraphQlException) when (cachedChapterId == id)
         {
@@ -200,13 +200,13 @@ public sealed partial class SuwayomiSource(
             }
 
             id = current;
-            (pages, pagesFor) = await client.FetchPagesAsync(id, ct);
+            (pages, pagesFor) = await PagesAsync(id, ct);
         }
 
         if (pagesFor is not null && pagesFor != chapter.SourceChapterId)
         {
             id = await ReResolveChapterAsync();
-            (pages, pagesFor) = await client.FetchPagesAsync(id, ct);
+            (pages, pagesFor) = await PagesAsync(id, ct);
             if (pagesFor is not null && pagesFor != chapter.SourceChapterId)
             {
                 throw new InvalidOperationException($"Suwayomi returned the pages of '{pagesFor}' for '{chapter.SourceChapterId}'");
@@ -301,6 +301,20 @@ public sealed partial class SuwayomiSource(
         }
 
         return id;
+    }
+
+    private async Task<(IReadOnlyList<string> Pages, string? PagesFor)> PagesAsync(int chapterId, CancellationToken ct)
+    {
+        try
+        {
+            return await client.FetchPagesAsync(chapterId, ct);
+        }
+        catch (SuwayomiGraphQlException ex) when (
+            ex.Message.Contains("purchase", StringComparison.OrdinalIgnoreCase) ||
+            ex.Message.Contains("log in via webview", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ChapterRequiresPurchaseException(ex.Message);
+        }
     }
 
     private SourceChapter ToSourceChapter(SuwayomiChapter chapter, string seriesUrl, string language)
