@@ -176,6 +176,7 @@ public class CbzLinkService(
             kavitaScans.QueueScan(seriesDir, series.Id);
         }
 
+        await ChapterPartCoverageService.UnwantCoveredPartsAsync(db, series.Id, ct);
         return (linked, unrecognized);
     }
 
