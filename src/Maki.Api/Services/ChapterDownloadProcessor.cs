@@ -419,6 +419,7 @@ public class ChapterDownloadProcessor(
             item.NextAttempt = null;
             item.ClearError();
             await db.SaveChangesAsync(CancellationToken.None);
+            await ChapterPartCoverageService.UnwantCoveredPartsAsync(db, series.Id, CancellationToken.None);
             seriesLock.Dispose();
 
             await AnnounceImportAsync(item, chapter, series, rootFolder, mapping, ct);
