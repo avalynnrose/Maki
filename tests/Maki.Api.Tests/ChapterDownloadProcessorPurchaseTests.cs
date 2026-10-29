@@ -5,6 +5,7 @@ using Maki.Core.Sources;
 namespace Maki.Api.Tests;
 
 /// <summary>A source that wants a purchase for a chapter is not retried: the download moves on, or stops.</summary>
+[Collection(ConfigDirCollection.Name)]
 public class ChapterDownloadProcessorPurchaseTests : IDisposable
 {
     private readonly UpgradeWorld _world = new();
