@@ -6,7 +6,8 @@ namespace Maki.Api.Tests;
 internal sealed class FakeSource : ISource, INextReleaseSource
 {
     public required string Name { get; init; }
-    public string DisplayName => Name;
+    private readonly string? _displayName;
+    public string DisplayName { get => _displayName ?? Name; init => _displayName = value; }
     public string BaseUrl => $"https://{Name}.test";
     public SourceCapabilities Capabilities { get; init; } = SourceCapabilities.None;
     public SourceKind Kind { get; init; } = SourceKind.Aggregator;

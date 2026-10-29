@@ -70,7 +70,7 @@ public class HealthCheckService(
             {
                 // {detail} is the source's own error text and is not translated.
                 issues.Add(new HealthIssue("sourceMapping", "warning", "health.issue.mappingFailing",
-                    new { series = mapping.Series?.Title ?? "", source = mapping.SourceName, detail = mapping.LastError ?? "" },
+                    new { series = mapping.Series?.Title ?? "", source = sources.Find(mapping.SourceName)?.DisplayName ?? mapping.SourceName, detail = mapping.LastError ?? "" },
                     mapping.SeriesId, $"mapping:{mapping.Id}", Source: group.Key));
             }
         }
