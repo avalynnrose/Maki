@@ -26,6 +26,12 @@ public record ParsedChapter(decimal? Number, int? Volume, bool IsOneShot, int? P
 /// </summary>
 public static partial class ChapterNumberParser
 {
+    /// <summary>
+    /// A number this large is a date or an id, not a chapter: no series has ten thousand. An extension
+    /// listed a magazine issue as 20251030 and it became a chapter of its own.
+    /// </summary>
+    public const decimal MaxChapterNumber = 10000;
+
     // "Episode 12" is how WeebCentral labels webtoons; read as a one-shot, every episode of a series
     // turned into its own unnumbered chapter.
     [GeneratedRegex(@"(?:\b(?:ch(?:apter)?|ep(?:isode)?)(?![a-z])[.・]?\s*)([0-9]+(?:\.[0-9]+|,[0-9]{1,2}(?![0-9]))?)", RegexOptions.IgnoreCase)]
@@ -183,6 +189,7 @@ public static partial class ChapterNumberParser
     // ("9,10", "10,11") are two chapters in one row ("Ch.9,10") and take the first.
     private static decimal? TryParseNumber(string digits) =>
         decimal.TryParse(CommaDecimal().Replace(digits, CommaNumber), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var number)
+        && number < MaxChapterNumber
             ? number
             : null;
 

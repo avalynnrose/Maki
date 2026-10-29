@@ -492,6 +492,12 @@ msgstr "{0, plural, one {Przed o #} few {Przed o #} many {Przed o #} other {Prze
 msgid "{0} in"
 msgstr "{0} w"
 
+#. placeholder {0}: series.collectedMainChapters
+#. placeholder {1}: series.totalChapters
+#: src/pages/SeriesDetailPage.tsx
+msgid "{0} of {1}"
+msgstr ""
+
 #. placeholder {0}: sideInterests.length
 #: src/pages/DiscoverPage.tsx
 #, fuzzy
@@ -4877,8 +4883,12 @@ msgstr "Rozdziały pobrane automatycznie"
 
 #: src/pages/SeriesDetailPage.tsx
 #, fuzzy
-msgid "Chapters known"
-msgstr "Znane rozdziały"
+#~ msgid "Chapters known"
+#~ msgstr "Znane rozdziały"
+
+#: src/pages/SeriesDetailPage.tsx
+msgid "Chapters listed by sources"
+msgstr ""
 
 #: src/components/SourceMappingsSection.tsx
 #, fuzzy
@@ -5272,6 +5282,10 @@ msgstr "Zwiń {lineLabel}"
 #, fuzzy
 msgid "Collapse sidebar"
 msgstr "Zwiń pasek boczny"
+
+#: src/pages/SeriesDetailPage.tsx
+msgid "Collected"
+msgstr ""
 
 #: src/nav.ts
 #, fuzzy
@@ -11031,6 +11045,11 @@ msgstr "Brak na dysku"
 #, fuzzy
 msgid "Missing posters"
 msgstr "Brakujące plakaty"
+
+#. placeholder {0}: series.missingMainChapters!.join(', ')
+#: src/pages/SeriesDetailPage.tsx
+msgid "Missing: {0}"
+msgstr ""
 
 #: src/components/series/FileQualityBadge.tsx
 #, fuzzy

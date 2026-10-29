@@ -51,6 +51,19 @@ public class ChapterNumberParserTests
     }
 
     [Theory]
+    [InlineData("20251030")]
+    [InlineData("第20251030話")]
+    [InlineData("Ch. 10000")]
+    public void A_number_that_is_a_date_or_an_id_is_not_a_chapter(string input)
+    {
+        Assert.Null(ChapterNumberParser.Parse(input).Number);
+    }
+
+    [Fact]
+    public void The_largest_real_chapter_numbers_still_parse() =>
+        Assert.Equal(9999m, ChapterNumberParser.Parse("Ch. 9999").Number);
+
+    [Theory]
     [InlineData("1巻", 1)]
     [InlineData("12巻", 12)]
     public void Reads_japanese_volume_labels_as_volumes(string input, int volume)

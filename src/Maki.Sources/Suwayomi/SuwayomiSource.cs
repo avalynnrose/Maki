@@ -325,7 +325,7 @@ public sealed partial class SuwayomiSource(
             seriesUrl,
             chapter.Url,
             chapter.Name,
-            chapter.ChapterNumber >= 0 && parsed is not { Number: null, Volume: not null } ? (decimal)chapter.ChapterNumber : parsed.NumberWithPart,
+            chapter.ChapterNumber is >= 0 and < (double)ChapterNumberParser.MaxChapterNumber && parsed is not { Number: null, Volume: not null } ? (decimal)chapter.ChapterNumber : parsed.NumberWithPart,
             parsed.Volume,
             TitleOf(chapter.Name),
             language,

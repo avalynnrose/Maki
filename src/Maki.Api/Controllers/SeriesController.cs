@@ -1043,6 +1043,18 @@ public class SeriesController(
             .OrderByDescending(p => p.CreatedAtUtc)
             .Select(p => (int?)p.Id)
             .FirstOrDefaultAsync(ct);
+        int? collectedMain = null;
+        IReadOnlyList<int> missingMain = [];
+        if (series.TotalChapters is > 0 and var expected)
+        {
+            var withFileNumbers = await db.Chapters.AsNoTracking()
+                .Where(c => c.SeriesId == id && c.ChapterFileId != null && c.Number != null)
+                .Select(c => c.Number!.Value)
+                .ToListAsync(ct);
+            (var collected, missingMain) = ChapterCollection.Collected(withFileNumbers, expected);
+            collectedMain = collected;
+        }
+
         var dto = SeriesDto.FromEntity(
             series, total, withFile, known, queued, active.Count - queued, readCount,
             rating: userState?.Rating, isAdmin: currentUser.Has(MakiPermission.Admin),
@@ -1050,6 +1062,8 @@ public class SeriesController(
             titleLanguage: await TitleLanguageAsync(ct)) with
         {
             RemovedChapterCount = counts?.Removed ?? 0,
+            CollectedMainChapters = collectedMain,
+            MissingMainChapters = missingMain,
             ReadFileCleanupActive = ReadFileCleanupService.AppliesTo(series.ReadFileCleanup, await readFileCleanup.OptionsAsync(ct)),
             PendingProposalId = pendingProposalId,
             ReadTimeEstimate = estimate is null

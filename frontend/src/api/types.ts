@@ -116,6 +116,10 @@ export interface SeriesDto {
    */
   notificationMode: string
   /** Personal time left from comparable timed chapters in the built-in reader. Detail endpoint only. */
+  /** Whole chapters from 1 to the metadata total that have a file; null without a total. Detail endpoint only. */
+  collectedMainChapters?: number | null
+  /** The whole chapters up to the total that have no file, capped. Detail endpoint only. */
+  missingMainChapters?: number[]
   readTimeEstimate?: {
     seconds: number
     remainingChapters: number

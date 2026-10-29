@@ -194,6 +194,16 @@ public record SeriesDto(
     public double? CommunityRating { get; init; }
 
     /// <summary>
+    /// Whole chapters from 1 to <see cref="TotalChapters"/> that have a file, chapter or volume. Judged
+    /// against the metadata total, not <see cref="KnownChapterCount"/>, which counts everything the
+    /// sources listed. Filled only by the detail endpoint; null without a metadata total.
+    /// </summary>
+    public int? CollectedMainChapters { get; init; }
+
+    /// <summary>The whole chapters up to the total that have no file, capped. Detail endpoint only.</summary>
+    public IReadOnlyList<int> MissingMainChapters { get; init; } = [];
+
+    /// <summary>
     /// Personal time left, based on timed chapters from the built-in reader. Filled only by the
     /// detail endpoint; null when fewer than three comparable chapters have timing data.
     /// </summary>
