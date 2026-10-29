@@ -177,6 +177,33 @@ public sealed class SourceOrderTests : IDisposable
     }
 
     [Fact]
+    public async Task A_source_whose_chapters_are_far_shorter_than_the_others_is_tried_last()
+    {
+        var (seriesId, poor, good, fresh) = Seed(SourceOrderMode.Quality, null);
+        using (var seed = _db.NewContext())
+        {
+            foreach (var (mapping, pages) in new[] { (good, 10), (poor, 42), (fresh, 46) })
+            {
+                for (var chapter = 11; chapter <= 13; chapter++)
+                {
+                    seed.SourceQualitySamples.Add(new SourceQualitySample
+                    {
+                        SourceMappingId = mapping, SeriesId = seriesId, ChapterId = chapter, PageCount = pages + chapter % 3,
+                        MedianWidth = 1000, MedianHeight = 1500, SizeBytes = 3_000_000, ImageFormat = "jpg",
+                        MeasuredAtUtc = DateTime.UtcNow
+                    });
+                }
+            }
+
+            seed.SaveChanges();
+        }
+
+        using var db = _db.NewContext();
+
+        Assert.Equal(good, (await OrderAsync(db, seriesId)).Last());
+    }
+
+    [Fact]
     public async Task Manual_order_ignores_download_failures()
     {
         var (seriesId, poor, good, fresh) = Seed(SourceOrderMode.Manual, null);
