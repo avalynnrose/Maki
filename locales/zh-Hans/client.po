@@ -616,6 +616,12 @@ msgstr ""
 msgid "{0} links, starting with {1}"
 msgstr ""
 
+#. placeholder {0}: series.collectedMainChapters
+#. placeholder {1}: series.totalChapters
+#: src/pages/SeriesDetailPage.tsx
+msgid "{0} of {1}"
+msgstr ""
+
 #. placeholder {0}: site.pages.count
 #: src/pages/settings/CustomSourceWizard.tsx
 msgid "{0} pages on the sample chapter."
@@ -5201,8 +5207,12 @@ msgstr "章节已自动下载"
 
 #: src/pages/SeriesDetailPage.tsx
 #, fuzzy
-msgid "Chapters known"
-msgstr "已知章节"
+#~ msgid "Chapters known"
+#~ msgstr "已知章节"
+
+#: src/pages/SeriesDetailPage.tsx
+msgid "Chapters listed by sources"
+msgstr ""
 
 #: src/components/SourceMappingsSection.tsx
 #, fuzzy
@@ -5608,6 +5618,10 @@ msgstr "收起 {lineLabel}"
 #, fuzzy
 msgid "Collapse sidebar"
 msgstr "收起侧边栏"
+
+#: src/pages/SeriesDetailPage.tsx
+msgid "Collected"
+msgstr ""
 
 #: src/nav.ts
 #, fuzzy
@@ -11636,6 +11650,11 @@ msgstr "磁盘中缺失"
 #, fuzzy
 msgid "Missing posters"
 msgstr "缺失海报"
+
+#. placeholder {0}: series.missingMainChapters!.join(', ')
+#: src/pages/SeriesDetailPage.tsx
+msgid "Missing: {0}"
+msgstr ""
 
 #: src/components/series/FileQualityBadge.tsx
 #, fuzzy

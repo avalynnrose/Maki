@@ -96,6 +96,22 @@ public class SuwayomiSourceTests
     }
 
     [Fact]
+    public async Task A_date_the_extension_gives_as_a_chapter_number_is_ignored()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "第1話", 1, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "SNOW ANGEL 25-26", 20251030, sourceOrder: 2));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal(2, chapters.Count);
+        Assert.Single(chapters, c => c.Number == 1m);
+        Assert.Single(chapters, c => c.Number is null);
+    }
+
+    [Fact]
     public async Task A_volume_label_stays_a_volume_whatever_number_the_extension_gives_it()
     {
         var h = new SuwayomiHarness();

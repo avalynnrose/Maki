@@ -537,6 +537,12 @@ msgstr "{0} is switched off under source languages, so auto-match won't pick thi
 msgid "{0} links, starting with {1}"
 msgstr "{0} links, starting with {1}"
 
+#. placeholder {0}: series.collectedMainChapters
+#. placeholder {1}: series.totalChapters
+#: src/pages/SeriesDetailPage.tsx
+msgid "{0} of {1}"
+msgstr "{0} of {1}"
+
 #. placeholder {0}: site.pages.count
 #: src/pages/settings/CustomSourceWizard.tsx
 msgid "{0} pages on the sample chapter."
@@ -4329,8 +4335,12 @@ msgid "Chapters downloaded automatically"
 msgstr "Chapters downloaded automatically"
 
 #: src/pages/SeriesDetailPage.tsx
-msgid "Chapters known"
-msgstr "Chapters known"
+#~ msgid "Chapters known"
+#~ msgstr "Chapters known"
+
+#: src/pages/SeriesDetailPage.tsx
+msgid "Chapters listed by sources"
+msgstr "Chapters listed by sources"
 
 #: src/components/SourceMappingsSection.tsx
 msgid "Chapters not listed by another enabled source will be removed. Files downloaded from this source will be detached so they cannot be read as the correct chapter."
@@ -4667,6 +4677,10 @@ msgstr "Collapse {lineLabel}"
 #: src/App.tsx
 msgid "Collapse sidebar"
 msgstr "Collapse sidebar"
+
+#: src/pages/SeriesDetailPage.tsx
+msgid "Collected"
+msgstr "Collected"
 
 #: src/nav.ts
 msgid "Collection"
@@ -9678,6 +9692,11 @@ msgstr "Missing from disk"
 #: src/pages/HealthPage.tsx
 msgid "Missing posters"
 msgstr "Missing posters"
+
+#. placeholder {0}: series.missingMainChapters!.join(', ')
+#: src/pages/SeriesDetailPage.tsx
+msgid "Missing: {0}"
+msgstr "Missing: {0}"
 
 #: src/components/series/FileQualityBadge.tsx
 msgid "Mixed"

@@ -2368,7 +2368,21 @@ function SeriesDetailBody() {
                           {series.lockedFields.includes('totalVolumes') && <>{' '}<MetadataLock /></>}
                         </RecordRow>
                     )}
-                    <RecordRow label={t`Chapters known`}>{series.knownChapterCount}</RecordRow>
+                    {series.totalChapters != null && (
+                        <RecordRow label={t`Chapters`}>
+                          {series.totalChapters}
+                          {series.lockedFields.includes('totalChapters') && <>{' '}<MetadataLock /></>}
+                        </RecordRow>
+                    )}
+                    {series.collectedMainChapters != null && series.totalChapters != null && (
+                        <RecordRow label={t`Collected`}>
+                          {t`${series.collectedMainChapters} of ${series.totalChapters}`}
+                          {(series.missingMainChapters?.length ?? 0) > 0 && (
+                            <>{' '}<span style={{ color: 'var(--ink-3)' }}>{t`Missing: ${series.missingMainChapters!.join(', ')}`}</span></>
+                          )}
+                        </RecordRow>
+                    )}
+                    <RecordRow label={t`Chapters listed by sources`}>{series.knownChapterCount}</RecordRow>
                     {series.readTimeEstimate && (
                         <RecordRow label={t`Time to finish`}>
                           <ReadTimeEstimateText estimate={series.readTimeEstimate} />
