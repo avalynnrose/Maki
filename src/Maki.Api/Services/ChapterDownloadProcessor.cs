@@ -1127,7 +1127,7 @@ public class ChapterDownloadProcessor(
         }
         else
         {
-            item.SetError("error.download.rateLimited", new { source = mapping.SourceName });
+            item.SetError("error.download.rateLimited", new { source = sourceRegistry.Find(mapping.SourceName)?.DisplayName ?? mapping.SourceName });
         }
 
         await db.SaveChangesAsync(ct);
