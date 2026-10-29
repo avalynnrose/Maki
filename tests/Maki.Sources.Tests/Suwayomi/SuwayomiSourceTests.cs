@@ -96,6 +96,23 @@ public class SuwayomiSourceTests
     }
 
     [Fact]
+    public async Task A_volume_label_stays_a_volume_whatever_number_the_extension_gives_it()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "1巻", 1, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "2巻", 2, sourceOrder: 2),
+            SuwayomiHarness.Chapter(3, "/c/3", "第3話", 3, sourceOrder: 3));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal(3, chapters.Count);
+        Assert.Equal([(null, 1), (null, 2), (3m, null)],
+            chapters.OrderBy(c => c.Volume ?? 99).Select(c => (c.Number, c.Volume)).ToArray());
+    }
+
+    [Fact]
     public async Task A_chapter_the_extension_did_not_number_takes_its_number_from_the_name()
     {
         var h = new SuwayomiHarness();
