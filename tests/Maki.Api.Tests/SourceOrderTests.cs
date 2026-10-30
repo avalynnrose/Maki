@@ -204,6 +204,24 @@ public sealed class SourceOrderTests : IDisposable
     }
 
     [Fact]
+    public async Task An_official_source_nobody_has_measured_is_tried_after_the_measured_ones()
+    {
+        var registry = new SourceRegistry([
+            new FakeSource { Name = "poor", Kind = SourceKind.Aggregator },
+            new FakeSource { Name = "good", Kind = SourceKind.Aggregator },
+            new FakeSource { Name = "fresh", Kind = SourceKind.Official }
+        ]);
+        var (seriesId, poor, good, fresh) = Seed(SourceOrderMode.Quality, null);
+        using var db = _db.NewContext();
+        var mappings = await db.SourceMappings.Where(m => m.SeriesId == seriesId).ToListAsync();
+
+        var result = await new SourceOrderService(registry, TestQuality.Create(registry))
+            .OrderAsync(db, seriesId, mappings, CancellationToken.None);
+
+        Assert.Equal([good, poor, fresh], result.Ordered.Select(m => m.Id));
+    }
+
+    [Fact]
     public async Task Manual_order_ignores_download_failures()
     {
         var (seriesId, poor, good, fresh) = Seed(SourceOrderMode.Manual, null);
