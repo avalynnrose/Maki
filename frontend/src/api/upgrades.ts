@@ -463,6 +463,7 @@ export const PROPOSAL_REASON_LABELS: Record<string, MessageDescriptor> = {
   no_span: msg`No volume or chapter range in the title`,
   no_profile: msg`No quality profile`,
   whole_series_pack: msg`Whole-series pack, needs your call`,
+  language_mismatch: msg`Written in a different language from your files`,
   trailing_number: msg`Release number may be a sequel, not a chapter`,
   upgrades_disabled: msg`Automatic upgrades are off, needs your call`,
   markers_off: msg`Uses volume or chapter words from a language that is off in Settings > Library > File name parsing`,

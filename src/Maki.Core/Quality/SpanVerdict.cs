@@ -41,6 +41,9 @@ public static class SpanVerdictReasons
     public const string OverBudget = "over_budget";
     public const string WholeSeriesPack = "whole_series_pack";
 
+    /// <summary>The release is written in Japanese or English and the series wants the other one.</summary>
+    public const string LanguageMismatch = "language_mismatch";
+
     /// <summary>The only chapter number was a bare number ending the title, which can be part of a name.</summary>
     public const string TrailingNumber = "trailing_number";
 

@@ -22344,6 +22344,10 @@ msgstr "Écrit la couverture de la série dans le dossier sous le nom cover.jpg.
 msgid "Written <0>claim=value</0>, e.g. <1>groups=maki-admins</1>."
 msgstr "Revendication écrite <0>claim=value</0>, par exemple <1>groups=maki-admins</1>."
 
+#: src/api/upgrades.ts
+msgid "Written in a different language from your files"
+msgstr ""
+
 #: src/pages/SeriesDetailPage.tsx
 #: src/pages/stats/RangeControl.tsx
 #: src/pages/stats/StatsRange.ts

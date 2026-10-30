@@ -22344,6 +22344,10 @@ msgstr "Schreibt das Serien-Cover als cover.jpg in den Ordner."
 msgid "Written <0>claim=value</0>, e.g. <1>groups=maki-admins</1>."
 msgstr "Geschrieben <0>claim=value</0>, z. B. <1>groups=maki-admins</1>."
 
+#: src/api/upgrades.ts
+msgid "Written in a different language from your files"
+msgstr ""
+
 #: src/pages/SeriesDetailPage.tsx
 #: src/pages/stats/RangeControl.tsx
 #: src/pages/stats/StatsRange.ts
