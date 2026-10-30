@@ -28,7 +28,7 @@ public sealed record SourceOrderResult(
 /// A source this series has not measured is judged by its record across the library, and one never
 /// measured anywhere gets the lowest measured points there are: below the reference is the norm, so
 /// scoring it as average would put it ahead of nearly every source that has been measured. Whatever
-/// the score, a source that keeps failing its downloads goes last (<see cref="SourceReliability"/>), and so does one whose page counts look like a preview (<see cref="SourcePageCounts"/>).
+/// the score, a source that keeps failing its downloads goes last (<see cref="SourceReliability"/>), and so does one whose page counts look like a preview (<see cref="SourcePageCounts"/>) or that nobody has measured: its tier says what it claims to be, not what it serves.
 /// </summary>
 public class SourceOrderService(SourceRegistry registry, ChapterFileQualityService quality)
 {
@@ -93,9 +93,15 @@ public class SourceOrderService(SourceRegistry registry, ChapterFileQualityServi
             .Where(q => q.SeriesId == seriesId && q.PageCount > 0)
             .Select(q => new SourcePageCounts.Sample(q.SourceMappingId, q.ChapterId, q.PageCount))
             .ToListAsync(ct));
+        var neverMeasured = mappings
+            .Where(m => !estimates.ContainsKey(m.Id) && !library.ContainsKey(m.SourceName))
+            .Select(m => m.Id)
+            .ToHashSet();
+        // Never measured goes behind measured; a source with a record of failing or serving previews goes
+        // last of all, behind one that is merely untried.
+        var measuredFirst = SourceReliability.Demote([.. ranked.Select(e => byId[e.MappingId])], m => neverMeasured.Contains(m.Id));
         var ordered = SourceReliability.Demote(
-            [.. ranked.Select(e => byId[e.MappingId])],
-            m => SourceReliability.IsUnreliable(outcomes[m.Id]) || truncated.Contains(m.Id));
+            measuredFirst, m => SourceReliability.IsUnreliable(outcomes[m.Id]) || truncated.Contains(m.Id));
         return new SourceOrderResult(seriesMode, defaultMode, ordered, scores);
     }
 
