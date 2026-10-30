@@ -72,6 +72,11 @@ public class SmartDownloadJob(
 
         foreach (var (series, after) in dueSeries)
         {
+            if (await VolumeFirstGate.HoldsAsync(db, settings, DateTime.UtcNow, series.Id, ct))
+            {
+                continue;
+            }
+
             var chapters = await db.Chapters.AsNoTracking().Where(c => c.SeriesId == series.Id).ToListAsync(ct);
             if (await PreviousBatchPendingAsync(db, chapters, maxAttempts, DateTime.UtcNow, ct))
             {

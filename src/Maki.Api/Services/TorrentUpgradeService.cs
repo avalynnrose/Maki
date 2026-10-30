@@ -53,7 +53,7 @@ public static class VolumeSearchReasons
 }
 
 /// <summary>The instance settings a volume search reads, loaded once per job run rather than per series.</summary>
-public sealed record VolumeSearchSettings(UpgradeOptions Options, bool IndexerConfigured);
+public sealed record VolumeSearchSettings(UpgradeOptions Options, bool IndexerConfigured, bool VolumeFirst = false);
 
 public enum ProposalActionError
 {
@@ -145,6 +145,7 @@ public class TorrentUpgradeService(
 
         var evaluator = await evaluation.ForSeriesAsync(seriesId, ct);
         var options = await UpgradeOptions.LoadAsync(settings, ct);
+        var volumeFirst = await settings.GetAsync(SettingKeys.DownloadsVolumeFirst, ct) == "true";
         var library = evaluator is null ? null : await LibraryAsync(series, ct);
         var ourTitles = ReleaseTitleMatcher.Titles(series.Title, series.OriginalTitle, series.AltTitles);
         var rivals = await RivalTitlesAsync(series, ourTitles, ct);
@@ -178,7 +179,7 @@ public class TorrentUpgradeService(
                 ? (library.All(evaluator, score), true)
                 : library.Covered(parsed.Span, evaluator, score);
             var verdict = SpanVerdicts.Evaluate(new SpanVerdictInput(parsed.Span, matched, mappingKnown, chapters,
-                release.Size, options.TorrentAutoGrabMaxBytes, options.VolumeMissingTolerance, wholeSeries));
+                release.Size, options.TorrentAutoGrabMaxBytes, options.VolumeMissingTolerance, wholeSeries, volumeFirst));
             if (trailing)
             {
                 verdict = verdict.AtMostProposal(SpanVerdictReasons.TrailingNumber);
@@ -433,7 +434,8 @@ public class TorrentUpgradeService(
 
     public async Task<VolumeSearchSettings> LoadSettingsAsync(CancellationToken ct) => new(
         await UpgradeOptions.LoadAsync(settings, ct),
-        (await IndexerSettingsStore.LoadAsync(settings, ct)).IsConfigured);
+        (await IndexerSettingsStore.LoadAsync(settings, ct)).IsConfigured,
+        await settings.GetAsync(SettingKeys.DownloadsVolumeFirst, ct) == "true");
 
     /// <param name="offset">Added to now; negative values make the series eligible again sooner.</param>
     private Task StampSearchedAsync(int seriesId, TimeSpan offset = default)
@@ -590,7 +592,15 @@ public class TorrentUpgradeService(
             .Where(c => c.SeriesId == series.Id && c.ChapterFileId != null && !c.ChapterFile!.Trusted)
             .Include(c => c.ChapterFile)
             .ToListAsync(ct);
-        return chapters.Any(c => TorrentUpgradeRules.StateOf(evaluator, c, c.ChapterFile, volume) == ChapterSpanState.Upgrade)
+        if (chapters.Any(c => TorrentUpgradeRules.StateOf(evaluator, c, c.ChapterFile, volume) == ChapterSpanState.Upgrade))
+        {
+            return null;
+        }
+
+        // Volume first: a series that has nothing yet, or only what it has already, still wants a look.
+        return run.VolumeFirst &&
+               await db.Chapters.AnyAsync(c => c.SeriesId == series.Id && c.Wanted && c.ChapterFileId == null &&
+                                               c.FileRemovedAt == null, ct)
             ? null
             : VolumeSearchReasons.NothingBelowCutoff;
     }

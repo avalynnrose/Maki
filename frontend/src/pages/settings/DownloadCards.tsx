@@ -128,19 +128,22 @@ export function SourcePrioritySection() {
   const save = useSaveDownloadSettings()
   const [sourceOrder, setSourceOrder] = useState<SourceOrderMode>('manual')
   const [scoutOnMatch, setScoutOnMatch] = useState(false)
+  const [volumeFirst, setVolumeFirst] = useState(false)
   const [discarded, discard] = useReducer((n: number) => n + 1, 0)
 
   useSliceSync(
-    settings && { sourceOrder: settings.sourceOrder, scoutOnMatch: settings.scoutOnMatch },
+    settings && { sourceOrder: settings.sourceOrder, scoutOnMatch: settings.scoutOnMatch, volumeFirst: settings.volumeFirst },
     (slice) => {
       setSourceOrder(slice.sourceOrder)
       setScoutOnMatch(slice.scoutOnMatch)
+      setVolumeFirst(slice.volumeFirst)
     },
     discarded,
   )
 
   const dirty =
-    settings !== undefined && (sourceOrder !== settings.sourceOrder || scoutOnMatch !== settings.scoutOnMatch)
+    settings !== undefined &&
+    (sourceOrder !== settings.sourceOrder || scoutOnMatch !== settings.scoutOnMatch || volumeFirst !== settings.volumeFirst)
 
   const byName = new Map((sources ?? []).map((s) => [s.name, s]))
   const enabled = priority
@@ -173,7 +176,7 @@ export function SourcePrioritySection() {
       dirty={dirty}
       saving={save.isPending}
       onDiscard={discard}
-      onSave={() => save.mutate({ sourceOrder, scoutOnMatch }, { onSuccess: savedToast })}
+      onSave={() => save.mutate({ sourceOrder, scoutOnMatch, volumeFirst }, { onSuccess: savedToast })}
     >
       <Select
         label={t`Pick a source by`}
@@ -192,6 +195,13 @@ export function SourcePrioritySection() {
         description={t`Once a new series is matched, sample a few pages from three chapters on each linked source, so its first downloads already come from the best one. Downloads a little from every source for every series you add.`}
         checked={scoutOnMatch}
         onChange={(e) => setScoutOnMatch(e.currentTarget.checked)}
+        mb="sm"
+      />
+      <Switch
+        label={t`Look for volume releases first`}
+        description={t`A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held.`}
+        checked={volumeFirst}
+        onChange={(e) => setVolumeFirst(e.currentTarget.checked)}
         mb="lg"
       />
       {(sources || priority) && (

@@ -2686,6 +2686,10 @@ msgstr "Uma pasta de importação da biblioteca foi concluída."
 msgid "A local embedding model lets Discover recommend by feel and search by description. The vectors download prebuilt, so this normally needs no attention. While it's off or still downloading, search falls back to titles and recommendations to genres."
 msgstr "Um modelo local de embeddings permite que Descobrir recomende por afinidade e pesquise por descrição. Os vetores são baixados prontos, então normalmente não é preciso fazer nada. Enquanto estiver desativado ou ainda baixando, a pesquisa usa os títulos e as recomendações usam os gêneros."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+msgstr ""
+
 #: src/components/NotificationsSection.tsx
 #, fuzzy
 msgid "A new system health problem was detected."
@@ -10327,6 +10331,10 @@ msgstr "página de entrada, plano de fundo, capas, mosaico, papel de parede"
 #, fuzzy
 msgid "longest {longestSitting}"
 msgstr "mais longa: {longestSitting}"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Look for volume releases first"
+msgstr ""
 
 #: src/components/discover/SeriesPreviewReader.tsx
 #, fuzzy

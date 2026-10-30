@@ -444,6 +444,14 @@ public static class SettingKeys
     /// </summary>
     public const string SourcesScoutOnMatch = "sources.scoutonmatch";
 
+    /// <summary>
+    /// "true" → a new series looks for a volume release before anything is downloaded from its sources:
+    /// the volume search runs once its sources are matched, a series with no files is eligible for it,
+    /// and automatic source downloads wait while a release is pending or downloading
+    /// (<c>VolumeFirstGate</c>). Off by default.
+    /// </summary>
+    public const string DownloadsVolumeFirst = "downloads.volumefirst";
+
     /// <summary>"true" turns on the daily automatic upgrade scan. A per-series manual scan ignores it.</summary>
     public const string UpgradesEnabled = "upgrades.enabled";
 

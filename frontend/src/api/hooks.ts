@@ -3710,6 +3710,8 @@ export interface DownloadSettings {
   scoutOnMatch: boolean
   /** Check each series on a tier picked from how recently it had a new chapter, instead of every 30 minutes. */
   adaptiveRefresh: boolean
+  /** Look for a volume release before a new series downloads anything from its sources. */
+  volumeFirst: boolean
 }
 
 /** `manual` follows each mapping's priority; `quality` ranks sources by the series' upgrade profile. */

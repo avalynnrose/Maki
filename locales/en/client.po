@@ -2174,6 +2174,10 @@ msgstr "A library import folder finished."
 msgid "A local embedding model lets Discover recommend by feel and search by description. The vectors download prebuilt, so this normally needs no attention. While it's off or still downloading, search falls back to titles and recommendations to genres."
 msgstr "A local embedding model lets Discover recommend by feel and search by description. The vectors download prebuilt, so this normally needs no attention. While it's off or still downloading, search falls back to titles and recommendations to genres."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+msgstr "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+
 #: src/components/NotificationsSection.tsx
 msgid "A new system health problem was detected."
 msgstr "A new system health problem was detected."
@@ -8379,6 +8383,10 @@ msgstr "login page, background, covers, mosaic, wallpaper"
 #: src/pages/stats/sections/RhythmSection.tsx
 msgid "longest {longestSitting}"
 msgstr "longest {longestSitting}"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Look for volume releases first"
+msgstr "Look for volume releases first"
 
 #: src/components/discover/SeriesPreviewReader.tsx
 msgid "Looking for a source…"

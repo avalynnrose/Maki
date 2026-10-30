@@ -2686,6 +2686,10 @@ msgstr "Импорт папки библиотеки завершён."
 msgid "A local embedding model lets Discover recommend by feel and search by description. The vectors download prebuilt, so this normally needs no attention. While it's off or still downloading, search falls back to titles and recommendations to genres."
 msgstr "Локальная модель векторных представлений позволяет Обзору рекомендовать серии по содержанию и искать по описанию. Векторы заранее загружаются, поэтому обычно ничего настраивать не нужно. Пока модель выключена или ещё загружается, поиск выполняется по названиям, а рекомендации строятся по жанрам."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+msgstr ""
+
 #: src/components/NotificationsSection.tsx
 #, fuzzy
 msgid "A new system health problem was detected."
@@ -10327,6 +10331,10 @@ msgstr "страница входа, фон, обложки, мозаика, о�
 #, fuzzy
 msgid "longest {longestSitting}"
 msgstr "самый долгий сеанс {longestSitting}"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Look for volume releases first"
+msgstr ""
 
 #: src/components/discover/SeriesPreviewReader.tsx
 #, fuzzy

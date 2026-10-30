@@ -2686,6 +2686,10 @@ msgstr "一个资料库导入文件夹已完成。"
 msgid "A local embedding model lets Discover recommend by feel and search by description. The vectors download prebuilt, so this normally needs no attention. While it's off or still downloading, search falls back to titles and recommendations to genres."
 msgstr "本地嵌入模型可让“发现”按内容氛围推荐作品，也可按描述搜索。向量会以预构建版本下载，通常无需你处理。模型关闭或仍在下载时，搜索会退回到按标题搜索，推荐也会退回到按类型推荐。"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+msgstr ""
+
 #: src/components/NotificationsSection.tsx
 #, fuzzy
 msgid "A new system health problem was detected."
@@ -10327,6 +10331,10 @@ msgstr "登录页, 背景, 封面, 马赛克, 壁纸"
 #, fuzzy
 msgid "longest {longestSitting}"
 msgstr "最长一次阅读 {longestSitting}"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Look for volume releases first"
+msgstr ""
 
 #: src/components/discover/SeriesPreviewReader.tsx
 #, fuzzy

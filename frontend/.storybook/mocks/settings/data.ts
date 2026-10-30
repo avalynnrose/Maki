@@ -283,6 +283,7 @@ export const downloadSettings: DownloadSettings = {
   sourceOrder: 'manual',
   scoutOnMatch: false,
   adaptiveRefresh: true,
+  volumeFirst: false,
 }
 
 export const readFileCleanup: ReadFileCleanupSettings = { enabled: false, days: 7, keepLast: true }

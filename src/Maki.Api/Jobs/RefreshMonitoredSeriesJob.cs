@@ -123,6 +123,12 @@ public class RefreshMonitoredSeriesJob(
         // false for Smart, so the predicate above simply never matched. It matches now.
         var smart = series?.MonitorNewItems == NewChapterMonitorMode.Smart;
 
+        // With volume first on, a series waits for its volume release before its sources are asked for
+        // chapters. The new ones stay wanted and are announced as available, like Smart's.
+        var volumeHold = !smart && await VolumeFirstGate.HoldsAsync(
+            db, scope.ServiceProvider.GetRequiredService<IAppSettings>(), DateTime.UtcNow, seriesId, ct);
+        var deferred = smart || volumeHold;
+
         // A burst this size is almost never a release. It is a source renumbering or backfilling its
         // list, and queueing it downloads the whole series in one go. The chapters stay wanted, so
         // "Search missing" still gets them once someone has looked.
@@ -131,7 +137,7 @@ public class RefreshMonitoredSeriesJob(
 
         var queuedItemIds = new List<int>();
         string? enqueueError = null;
-        if (!smart && !held)
+        if (!deferred && !held)
         {
             var result = await queue.EnqueueChaptersAsync(wanted, DownloadOrigin.MonitorRefresh, null, ct);
             queuedItemIds.AddRange(result.Queued.Select(item => item.Id));
@@ -158,7 +164,8 @@ public class RefreshMonitoredSeriesJob(
         else
         {
             logger.LogInformation(
-                smart ? "Series {SeriesId}: found {Count} new chapter(s), left to Smart Download"
+                volumeHold ? "Series {SeriesId}: found {Count} new chapter(s), waiting for its volume release"
+                : smart ? "Series {SeriesId}: found {Count} new chapter(s), left to Smart Download"
                       : "Series {SeriesId}: queued {Count} new chapter(s)",
                 seriesId, announced);
         }
@@ -169,7 +176,7 @@ public class RefreshMonitoredSeriesJob(
         // Two messages rather than one with a `select`, because "available" and "queued for
         // download" are different sentences, not two words in the same one.
         var bodyKey = held ? "notify.chapters.held.body"
-            : smart ? "notify.chapters.available.body"
+            : deferred ? "notify.chapters.available.body"
             : "notify.chapters.queued.body";
         notifications.Dispatch(NotificationEventType.NewChapterAvailable, new NotificationMessage(
             NotificationEventType.NewChapterAvailable,
@@ -183,7 +190,7 @@ public class RefreshMonitoredSeriesJob(
             // {series} is filled at read time from SeriesId, not from `title` here, so somebody
             // whose ui.titlelanguage is Japanese reads the Japanese title in their bell.
             inbox.Raise(InboxEventType.NewChapterAvailable, new InboxMessage(
-                    Key: held ? "inbox.chapters.held" : smart ? "inbox.chapters.available" : "inbox.chapters.queued",
+                    Key: held ? "inbox.chapters.held" : deferred ? "inbox.chapters.available" : "inbox.chapters.queued",
                     Params: InboxMessage.Args(new { count = announced }),
                     SeriesId: seriesId,
                     Url: $"/series/{seriesId}"),
