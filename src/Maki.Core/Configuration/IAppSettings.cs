@@ -509,6 +509,12 @@ public static class SettingKeys
     /// <summary>Days a pending torrent proposal waits before it expires (1..365, default 30).</summary>
     public const string UpgradesProposalExpiryDays = "upgrades.proposalExpiryDays";
 
+    /// <summary>"true" → a volume release proposal that <c>ProposalAutoApproval</c> allows is grabbed without waiting for a click. Off by default.</summary>
+    public const string UpgradesAutoApprove = "upgrades.autoApprove";
+
+    /// <summary>Largest release, in bytes, that may be approved automatically.</summary>
+    public const string UpgradesAutoApproveMaxBytes = "upgrades.autoApproveMaxBytes";
+
     /// <summary>Local date (yyyy-MM-dd) the volume search last ran, written by <c>UpgradeVolumeSearchJob</c>.</summary>
     public const string UpgradesLastVolumeSearchDate = "upgrades.lastVolumeSearchDate";
 
