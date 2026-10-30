@@ -3270,6 +3270,10 @@ msgstr "Approve and queue"
 msgid "Approve request"
 msgstr "Approve request"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Approve volume releases automatically"
+msgstr "Approve volume releases automatically"
+
 #: src/pages/RequestsPage.tsx
 msgid "Approved"
 msgstr "Approved"
@@ -3465,6 +3469,10 @@ msgstr "Automatic (match my browser)"
 #: src/pages/HealthPage.tsx
 msgid "Automatic (source priority)"
 msgstr "Automatic (source priority)"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Automatic approval size ceiling (MB)"
+msgstr "Automatic approval size ceiling (MB)"
 
 #: src/api/inbox.ts
 msgid "Automatic download failed"
@@ -7493,6 +7501,10 @@ msgstr "Grabbed from {indexer}"
 msgid "Grabbed from {indexer}: {releaseName}"
 msgstr "Grabbed from {indexer}: {releaseName}"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Grabs a proposed release without waiting for you when it is a digital release within the size ceiling and its only reasons for waiting are that it names no volume range, adds chapters you don't have, or is over the auto-grab size. Anything Maki is unsure about, such as chapters it cannot place, still waits for you. Replaced files go to the trash as usual. Pending proposals are checked on the next daily run, or when you press Search now."
+msgstr "Grabs a proposed release without waiting for you when it is a digital release within the size ceiling and its only reasons for waiting are that it names no volume range, adds chapters you don't have, or is over the auto-grab size. Anything Maki is unsure about, such as chapters it cannot place, still waits for you. Replaced files go to the trash as usual. Pending proposals are checked on the next daily run, or when you press Search now."
+
 #: src/pages/reader/ReaderToolbar.tsx
 msgid "Gray"
 msgstr "Gray"
@@ -10111,6 +10123,10 @@ msgstr "never"
 #: src/components/series/SeriesActionsMenu.tsx
 msgid "Never"
 msgstr "Never"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Never approve a release larger than this on your behalf. The 12288 MB default is about 50 digital volumes."
+msgstr "Never approve a release larger than this on your behalf. The 12288 MB default is about 50 digital volumes."
 
 #: src/components/NotificationsSection.tsx
 msgid "Never delivered."

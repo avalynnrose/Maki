@@ -740,10 +740,14 @@ export function VolumeReleasesSection() {
   const [volumeMissingTolerance, setVolumeMissingTolerance] = useState<number>(3)
   const [volumeSearchesPerRun, setVolumeSearchesPerRun] = useState<number>(10)
   const [proposalExpiryDays, setProposalExpiryDays] = useState<number>(30)
+  const [autoApprove, setAutoApprove] = useState(false)
+  const [autoApproveMb, setAutoApproveMb] = useState<number>(12288)
   const [discarded, discard] = useReducer((n: number) => n + 1, 0)
 
   useSliceSync(
     settings && {
+      autoApprove: settings.autoApprove,
+      autoApproveMaxBytes: settings.autoApproveMaxBytes,
       volumeSearch: settings.volumeSearch,
       torrentAutoGrabMaxBytes: settings.torrentAutoGrabMaxBytes,
       volumeMissingTolerance: settings.volumeMissingTolerance,
@@ -756,11 +760,14 @@ export function VolumeReleasesSection() {
       setVolumeMissingTolerance(slice.volumeMissingTolerance)
       setVolumeSearchesPerRun(slice.volumeSearchesPerRun)
       setProposalExpiryDays(slice.proposalExpiryDays)
+      setAutoApprove(slice.autoApprove)
+      setAutoApproveMb(slice.autoApproveMaxBytes / BYTES_PER_MB)
     },
     discarded,
   )
 
   const autoGrabBytes = Math.round(Number(autoGrabMb) * BYTES_PER_MB)
+  const autoApproveBytes = Math.round(Number(autoApproveMb) * BYTES_PER_MB)
 
   const dirty =
     settings !== undefined &&
@@ -768,7 +775,9 @@ export function VolumeReleasesSection() {
       autoGrabBytes !== settings.torrentAutoGrabMaxBytes ||
       Number(volumeMissingTolerance) !== settings.volumeMissingTolerance ||
       Number(volumeSearchesPerRun) !== settings.volumeSearchesPerRun ||
-      Number(proposalExpiryDays) !== settings.proposalExpiryDays)
+      Number(proposalExpiryDays) !== settings.proposalExpiryDays ||
+      autoApprove !== settings.autoApprove ||
+      autoApproveBytes !== settings.autoApproveMaxBytes)
 
   return (
     <SettingsSection
@@ -786,6 +795,8 @@ export function VolumeReleasesSection() {
             volumeMissingTolerance: Number(volumeMissingTolerance),
             volumeSearchesPerRun: Number(volumeSearchesPerRun),
             proposalExpiryDays: Number(proposalExpiryDays),
+            autoApprove,
+            autoApproveMaxBytes: autoApproveBytes,
           },
           { onSuccess: savedToast },
         )
@@ -836,6 +847,25 @@ export function VolumeReleasesSection() {
           disabled={!volumeSearch}
         />
       </Group>
+      <Switch
+        label={t`Approve volume releases automatically`}
+        description={t`Grabs a proposed release without waiting for you when it is a digital release within the size ceiling and its only reasons for waiting are that it names no volume range, adds chapters you don't have, or is over the auto-grab size. Anything Maki is unsure about, such as chapters it cannot place, still waits for you. Replaced files go to the trash as usual. Pending proposals are checked on the next daily run, or when you press Search now.`}
+        checked={autoApprove}
+        onChange={(e) => setAutoApprove(e.currentTarget.checked)}
+        disabled={!volumeSearch}
+        mt="md"
+        mb="sm"
+      />
+      <SettingsNumberInput
+        label={t`Automatic approval size ceiling (MB)`}
+        description={t`Never approve a release larger than this on your behalf. The 12288 MB default is about 50 digital volumes.`}
+        min={100}
+        max={204800}
+        decimalScale={0}
+        value={autoApproveMb}
+        onChange={setAutoApproveMb}
+        disabled={!volumeSearch || !autoApprove}
+      />
     </SettingsSection>
   )
 }

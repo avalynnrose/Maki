@@ -3930,6 +3930,10 @@ msgstr "Zatwierdź i dodaj do kolejki"
 msgid "Approve request"
 msgstr "Zatwierdź prośbę"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Approve volume releases automatically"
+msgstr ""
+
 #: src/pages/RequestsPage.tsx
 #, fuzzy
 msgid "Approved"
@@ -4156,6 +4160,10 @@ msgstr "Automatycznie (dopasuj do mojej przeglądarki)"
 #, fuzzy
 msgid "Automatic (source priority)"
 msgstr "Automatycznie (priorytet źródeł)"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Automatic approval size ceiling (MB)"
+msgstr ""
 
 #: src/api/inbox.ts
 #, fuzzy
@@ -8992,6 +9000,10 @@ msgstr "Pobrano z {indexer}"
 msgid "Grabbed from {indexer}: {releaseName}"
 msgstr "Pobrano z {indexer}: {releaseName}"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Grabs a proposed release without waiting for you when it is a digital release within the size ceiling and its only reasons for waiting are that it names no volume range, adds chapters you don't have, or is over the auto-grab size. Anything Maki is unsure about, such as chapters it cannot place, still waits for you. Replaced files go to the trash as usual. Pending proposals are checked on the next daily run, or when you press Search now."
+msgstr ""
+
 #: src/pages/reader/ReaderToolbar.tsx
 #, fuzzy
 msgid "Gray"
@@ -12145,6 +12157,10 @@ msgstr "nigdy"
 
 #: src/components/series/SeriesActionsMenu.tsx
 msgid "Never"
+msgstr ""
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Never approve a release larger than this on your behalf. The 12288 MB default is about 50 digital volumes."
 msgstr ""
 
 #: src/components/NotificationsSection.tsx

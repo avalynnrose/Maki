@@ -421,6 +421,14 @@ public class TorrentUpgradeService(
             {
                 if (await ProposeAsync(seriesId, proposal, ct) is { } row)
                 {
+                    if (options.AutoApprove && !switchesOff &&
+                        ProposalAutoApproval.Allows(proposal.Verdict.Reasons, proposal.Release.Size, proposal.Parsed.IsDigital,
+                            options.AutoApproveMaxBytes) &&
+                        await TryAutoApproveAsync(row, series.Title, ct) is { } approvedItem)
+                    {
+                        return new SeriesVolumeSearchResult(true, result.Releases.Count, approvedItem, null, null);
+                    }
+
                     return new SeriesVolumeSearchResult(true, result.Releases.Count, null, row.Id, null);
                 }
             }
@@ -448,7 +456,8 @@ public class TorrentUpgradeService(
     }
 
     /// <summary>Queues the proposal's release with the verdict as it reads against the library now.</summary>
-    public async Task<(int? QueueItemId, ProposalActionError Error)> GrabProposalAsync(int proposalId, int? userId, CancellationToken ct)
+    public async Task<(int? QueueItemId, ProposalActionError Error)> GrabProposalAsync(
+        int proposalId, int? userId, CancellationToken ct, bool autoApproved = false)
     {
         var row = await db.TorrentProposals.FirstOrDefaultAsync(p => p.Id == proposalId, ct);
         if (row is null)
@@ -467,6 +476,7 @@ public class TorrentUpgradeService(
         var info = evaluator is not null && view is not null
             ? InfoFor(evaluator, view, row.Id)
             : new TorrentUpgradeInfo { ProposalId = row.Id, Reasons = [SpanVerdictReasons.NoProfile] };
+        info.AutoApproved = autoApproved;
 
         var item = await releases.GrabAsync(row.SeriesId, release, DownloadOrigin.Upgrade, userId, info.Serialize(), ct);
         row.Status = TorrentProposalStatus.Accepted;
@@ -475,6 +485,72 @@ public class TorrentUpgradeService(
         row.ResolvedAtUtc = time.GetUtcNow().UtcDateTime;
         await db.SaveChangesAsync(ct);
         return (item.Id, ProposalActionError.None);
+    }
+
+    /// <summary>The most proposals one sweep approves, so a long backlog does not flood the download client at once.</summary>
+    public const int MaxAutoApprovalsPerSweep = 10;
+
+    private async Task<int?> TryAutoApproveAsync(TorrentProposal row, string title, CancellationToken ct)
+    {
+        try
+        {
+            var (queueItemId, error) = await GrabProposalAsync(row.Id, null, ct, autoApproved: true);
+            if (queueItemId is { } item)
+            {
+                logger.LogInformation("Approved '{Release}' for '{Title}' automatically", row.Title, title);
+                return item;
+            }
+
+            logger.LogDebug("Proposal {Id} for '{Title}' was not approved automatically: {Error}", row.Id, title, error);
+            return null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException
+                                       && !ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Could not approve '{Release}' for '{Title}' automatically; it stays a proposal",
+                row.Title, title);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// With automatic approval on, approves the pending proposals that were left before it was switched
+    /// on, or while the release was still being judged. Same rule as a fresh search; the rest keep waiting.
+    /// </summary>
+    public async Task<int> AutoApprovePendingAsync(CancellationToken ct)
+    {
+        var options = await UpgradeOptions.LoadAsync(settings, ct);
+        if (!options.AutoApprove || !options.Enabled || !options.VolumeSearch)
+        {
+            return 0;
+        }
+
+        var approved = 0;
+        var pending = await db.TorrentProposals.AsNoTracking()
+            .Where(p => p.Status == TorrentProposalStatus.Pending)
+            .OrderBy(p => p.CreatedAtUtc)
+            .ToListAsync(ct);
+        foreach (var row in pending)
+        {
+            if (approved >= MaxAutoApprovalsPerSweep)
+            {
+                break;
+            }
+
+            var reasons = JsonSerializer.Deserialize<string[]>(row.ReasonsJson) ?? [];
+            if (!ProposalAutoApproval.Allows(reasons, row.SizeBytes, ReleaseTitleParser.Parse(row.Title).IsDigital,
+                    options.AutoApproveMaxBytes))
+            {
+                continue;
+            }
+
+            if (await TryAutoApproveAsync(row, row.Title, ct) is not null)
+            {
+                approved++;
+            }
+        }
+
+        return approved;
     }
 
     public async Task<ProposalActionError> DismissAsync(int proposalId, int? userId, CancellationToken ct)
