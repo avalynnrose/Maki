@@ -417,6 +417,7 @@ export const downloadSettings: DownloadSettings = {
   adaptiveRefresh: true,
   removeCompleted: 'never',
   removeData: true,
+  volumeFirst: false,
 }
 
 export const readFileCleanup: ReadFileCleanupSettings = { enabled: false, days: 7, keepLast: true }

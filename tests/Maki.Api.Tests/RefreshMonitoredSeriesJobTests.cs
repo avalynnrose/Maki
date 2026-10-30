@@ -203,6 +203,36 @@ public class RefreshSmartGateTests : IDisposable
     }
 
     [Fact]
+    public async Task A_series_waiting_for_its_volume_release_wants_new_chapters_but_queues_none()
+    {
+        var settings = new FakeAppSettings()
+            .Set(SettingKeys.DownloadsVolumeFirst, "true")
+            .Set(SettingKeys.ProwlarrUrl, "http://prowlarr.test")
+            .Set(SettingKeys.ProwlarrApiKey, "key");
+
+        var (chapters, queued) = await RefreshAsync(NewChapterMonitorMode.All, settings: settings,
+            configure: s => s.Added = DateTime.UtcNow);
+
+        Assert.Equal(2, chapters.Count);
+        Assert.All(chapters, c => Assert.True(c.Wanted));
+        Assert.Equal(0, queued);
+    }
+
+    [Fact]
+    public async Task Volume_first_changes_nothing_for_a_series_added_long_ago()
+    {
+        var settings = new FakeAppSettings()
+            .Set(SettingKeys.DownloadsVolumeFirst, "true")
+            .Set(SettingKeys.ProwlarrUrl, "http://prowlarr.test")
+            .Set(SettingKeys.ProwlarrApiKey, "key");
+
+        var (_, queued) = await RefreshAsync(NewChapterMonitorMode.All, settings: settings,
+            configure: s => s.Added = DateTime.UtcNow.AddDays(-30));
+
+        Assert.Equal(2, queued);
+    }
+
+    [Fact]
     public async Task Non_smart_series_queues_its_new_chapters()
     {
         var (chapters, queued) = await RefreshAsync(NewChapterMonitorMode.All);

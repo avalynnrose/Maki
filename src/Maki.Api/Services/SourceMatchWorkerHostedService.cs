@@ -222,6 +222,7 @@ public class SourceMatchWorkerHostedService(
                 await sync.SyncSeriesAsync(series.Id, ct);
                 await scope.ServiceProvider.GetRequiredService<SourceScoutService>()
                     .StartIfEnabledAsync(db, series.Id, ct);
+                await SearchVolumesFirstAsync(scope.ServiceProvider, series.Id, ct);
             }
         }
         catch (Exception ex)
@@ -551,6 +552,27 @@ public class SourceMatchWorkerHostedService(
             {
                 // Deliberately quiet: see the class summary.
             }
+        }
+    }
+
+    /// <summary>
+    /// Volume first: once a new series' sources are matched, ask the indexers for a volume release
+    /// before anything is downloaded from them. Failures are the search's own business and never fail the match.
+    /// </summary>
+    private async Task SearchVolumesFirstAsync(IServiceProvider services, int seriesId, CancellationToken ct)
+    {
+        try
+        {
+            var upgrades = services.GetRequiredService<TorrentUpgradeService>();
+            var run = await upgrades.LoadSettingsAsync(ct);
+            if (run.VolumeFirst)
+            {
+                await upgrades.SearchSeriesAsync(seriesId, ct, respectInterval: false, ignoreGlobalSwitch: true, run);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Volume-first search failed for series {SeriesId}", seriesId);
         }
     }
 }

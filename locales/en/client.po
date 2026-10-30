@@ -2400,6 +2400,10 @@ msgstr "A health review is active for this series"
 msgid "A large selection can take a while."
 msgstr "A large selection can take a while."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+msgstr "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+
 #: src/pages/settings/SuwayomiCards.tsx
 msgid "A new URL clears the saved password, so enter it again."
 msgstr "A new URL clears the saved password, so enter it again."
@@ -9069,6 +9073,10 @@ msgstr "login page, background, covers, mosaic, wallpaper"
 #: src/pages/stats/sections/RhythmSection.tsx
 msgid "longest {longestSitting}"
 msgstr "longest {longestSitting}"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Look for volume releases first"
+msgstr "Look for volume releases first"
 
 #: src/components/discover/SeriesPreviewReader.tsx
 msgid "Looking for a source…"

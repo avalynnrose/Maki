@@ -16,7 +16,8 @@ public sealed record SpanVerdictInput(
     long SizeBytes,
     long AutoGrabMaxBytes,
     int MissingTolerancePerVolume,
-    bool WholeSeries = false);
+    bool WholeSeries = false,
+    bool MissingOnlyOk = false);
 
 public sealed record SpanVerdict(
     SpanOutcome Outcome,
@@ -87,7 +88,12 @@ public static class SpanVerdicts
             Count(ChapterSpanState.Missing), Count(ChapterSpanState.Unknown), replaced);
 
         if (!input.TitleMatched) return Verdict(SpanOutcome.Ignore, [SpanVerdictReasons.TitleUncertain]);
-        if (upgrade == 0) return Verdict(SpanOutcome.Ignore, [SpanVerdictReasons.NothingToUpgrade]);
+        // A release that only adds chapters is of no use to an upgrade scan, but it is exactly what a
+        // series with no files is looking for when volume releases are tried first.
+        if (upgrade == 0 && !(input.MissingOnlyOk && Count(ChapterSpanState.Missing) > 0))
+        {
+            return Verdict(SpanOutcome.Ignore, [SpanVerdictReasons.NothingToUpgrade]);
+        }
         if (input.Span.IsEmpty && !input.WholeSeries) return Verdict(SpanOutcome.Ignore, [SpanVerdictReasons.NoSpan]);
 
         // A pack with no span in its name claims the whole series, which nothing can check before the

@@ -164,11 +164,12 @@ public class SettingsController(
     /// See <see cref="SettingKeys.DownloadClientRemoveCompleted"/>: <c>never</c> or <c>afterimport</c>. Null on a write leaves it alone.
     /// </param>
     /// <param name="RemoveData">See <see cref="SettingKeys.DownloadClientRemoveData"/>. Null on a write leaves it alone.</param>
+    /// <param name="VolumeFirst">See <see cref="SettingKeys.DownloadsVolumeFirst"/>. Null on a write leaves it alone.</param>
     public record DownloadSettings(
         int ConcurrentChapters, bool RetryEnabled, int RetryMaxAttempts,
         int SmartDownloadChaptersLeft, int SmartDownloadChapters, int ItemTimeoutMinutes,
         bool UseHardlinks = true, int? BulkHoldThreshold = null, string? SourceOrder = null, bool? ScoutOnMatch = null,
-        bool? AdaptiveRefresh = null, string? RemoveCompleted = null, bool? RemoveData = null);
+        bool? AdaptiveRefresh = null, string? RemoveCompleted = null, bool? RemoveData = null, bool? VolumeFirst = null);
     /// <param name="Enabled">Turns the daily upgrade scan on.</param>
     /// <param name="DefaultProfileId">The upgrade profile a series without its own pin uses, or null for none.</param>
     /// <param name="MaxPerDay">0 means no cap.</param>
@@ -1008,7 +1009,8 @@ public class SettingsController(
         await settings.GetAsync(SettingKeys.SourcesScoutOnMatch, ct) == "true",
         await AdaptiveRefreshAsync(ct),
         await RemoveCompletedAsync(ct),
-        await RemoveDataAsync(ct)));
+        await RemoveDataAsync(ct),
+        await settings.GetAsync(SettingKeys.DownloadsVolumeFirst, ct) == "true"));
 
     private async Task<string> RemoveCompletedAsync(CancellationToken ct) =>
         TorrentRemovalModes.Parse(await settings.GetAsync(SettingKeys.DownloadClientRemoveCompleted, ct)) ?? TorrentRemovalModes.Never;
@@ -1115,6 +1117,11 @@ public class SettingsController(
             await settings.SetAsync(SettingKeys.DownloadClientRemoveData, removeData ? "true" : "false", ct);
         }
 
+        if (request.VolumeFirst is { } volumeFirst)
+        {
+            await settings.SetAsync(SettingKeys.DownloadsVolumeFirst, volumeFirst ? "true" : "false", ct);
+        }
+
         if (request.AdaptiveRefresh is { } adaptive && adaptive != await AdaptiveRefreshAsync(ct))
         {
             await settings.SetAsync(SettingKeys.MonitoringAdaptiveRefresh, adaptive ? "true" : "false", ct);
@@ -1130,7 +1137,8 @@ public class SettingsController(
             ScoutOnMatch = await settings.GetAsync(SettingKeys.SourcesScoutOnMatch, ct) == "true",
             AdaptiveRefresh = await AdaptiveRefreshAsync(ct),
             RemoveCompleted = await RemoveCompletedAsync(ct),
-            RemoveData = await RemoveDataAsync(ct)
+            RemoveData = await RemoveDataAsync(ct),
+            VolumeFirst = await settings.GetAsync(SettingKeys.DownloadsVolumeFirst, ct) == "true"
         });
     }
 

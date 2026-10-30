@@ -2895,6 +2895,10 @@ msgstr "이 시리즈에 상태 검토가 진행 중입니다"
 msgid "A large selection can take a while."
 msgstr "선택 항목이 많으면 시간이 걸릴 수 있습니다."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "A new series asks your indexers for a volume release once its sources are matched, before anything is downloaded from them. While a release is waiting for approval or downloading, automatic downloads from sources wait too (at most a week), so the same chapters are not fetched twice. Needs Prowlarr or Jackett. Downloads you start yourself are never held."
+msgstr ""
+
 #: src/pages/settings/SuwayomiCards.tsx
 #, fuzzy
 msgid "A new URL clears the saved password, so enter it again."
@@ -10898,6 +10902,10 @@ msgstr "로그인 페이지, 배경, 표지, 커버, 모자이크, 벽지, login
 #, fuzzy
 msgid "longest {longestSitting}"
 msgstr "최장 {longestSitting}"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Look for volume releases first"
+msgstr ""
 
 #: src/components/discover/SeriesPreviewReader.tsx
 #, fuzzy

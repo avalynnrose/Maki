@@ -110,6 +110,53 @@ public class TorrentUpgradeServiceTests : IDisposable
             ignoreGlobalSwitch);
     }
 
+    [Fact]
+    public async Task A_series_with_nothing_to_upgrade_but_chapters_missing_is_searched_only_when_volume_first_is_on()
+    {
+        Chapter(1, 1, file: f => f.Trusted = true);
+        Chapter(2, 1, withFile: false);
+
+        Assert.Equal(VolumeSearchReasons.NothingBelowCutoff, (await SearchAsync()).Reason);
+
+        _world.Settings.Set(SettingKeys.DownloadsVolumeFirst, "true");
+        var result = await SearchAsync();
+
+        Assert.True(result.Searched);
+        Assert.Null(result.Reason);
+    }
+
+    [Fact]
+    public async Task A_series_with_no_files_at_all_is_searched_when_volume_first_is_on()
+    {
+        using (var db = _world.Db.NewContext())
+        {
+            db.Chapters.RemoveRange(db.Chapters);
+            db.ChapterFiles.RemoveRange(db.ChapterFiles);
+            db.SaveChanges();
+        }
+
+        Chapter(1, 1, withFile: false);
+        Assert.Equal(VolumeSearchReasons.NothingBelowCutoff, (await SearchAsync()).Reason);
+
+        _world.Settings.Set(SettingKeys.DownloadsVolumeFirst, "true");
+
+        Assert.True((await SearchAsync()).Searched);
+    }
+
+    [Fact]
+    public async Task A_volume_release_for_a_series_with_nothing_yet_is_only_considered_when_volume_first_is_on()
+    {
+        Chapter(1, 1, withFile: false);
+        Chapter(2, 1, withFile: false);
+
+        var off = await EvaluateAsync("Kaguya v01 (2022) (Digital) (1r0n)");
+        _world.Settings.Set(SettingKeys.DownloadsVolumeFirst, "true");
+        var on = await EvaluateAsync("Kaguya v01 (2022) (Digital) (1r0n)");
+
+        Assert.Equal(SpanOutcome.Ignore, off.Verdict.Outcome);
+        Assert.NotEqual(SpanOutcome.Ignore, on.Verdict.Outcome);
+    }
+
     private async Task<TorrentCandidateView> EvaluateAsync(string title, long size = 100L * 1024 * 1024)
     {
         using var db = _world.Db.NewContext();
