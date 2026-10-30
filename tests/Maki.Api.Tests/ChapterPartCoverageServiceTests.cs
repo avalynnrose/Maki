@@ -25,7 +25,11 @@ public sealed class ChapterPartCoverageServiceTests : IDisposable
             var file = new ChapterFile { SeriesId = series.Id, RelativePath = "S/4.cbz", Size = 1 };
             seed.ChapterFiles.Add(file);
             seed.SaveChanges();
-            foreach (var (number, withFile) in new[] { (4m, true), (4.1m, false), (4.2m, false), (5m, false), (3.5m, false) })
+            foreach (var (number, withFile) in new[]
+                     {
+                         (4m, true), (4.1m, false), (4.2m, false), (5m, false), (3.5m, false),
+                         (6m, false), (6.1m, true), (6.2m, true)
+                     })
             {
                 seed.Chapters.Add(new Chapter
                 {
@@ -40,10 +44,10 @@ public sealed class ChapterPartCoverageServiceTests : IDisposable
         using var db = _db.NewContext();
         var changed = await ChapterPartCoverageService.UnwantCoveredPartsAsync(db, seriesId, CancellationToken.None);
 
-        Assert.Equal(2, changed);
+        Assert.Equal(3, changed);
         using var check = _db.NewContext();
         var wanted = check.Chapters.Where(c => c.SeriesId == seriesId && c.Wanted).Select(c => c.Number).ToList()
             .OrderBy(n => n).ToList();
-        Assert.Equal([3.5m, 4m, 5m], wanted);
+        Assert.Equal([3.5m, 4m, 5m, 6.1m, 6.2m], wanted);
     }
 }

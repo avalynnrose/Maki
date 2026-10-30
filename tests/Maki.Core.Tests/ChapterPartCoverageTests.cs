@@ -62,4 +62,36 @@ public class ChapterPartCoverageTests
 
         Assert.Empty(ChapterPartCoverage.CoveredParts(rows));
     }
+
+    [Fact]
+    public void A_whole_chapter_whose_parts_all_have_files_is_covered()
+    {
+        var rows = new[] { R(1, 1), R(2, 1.1m, file: true), R(3, 1.2m, file: true), R(4, 1.3m, file: true) };
+
+        Assert.Equal([1], ChapterPartCoverage.CoveredWholes(rows));
+    }
+
+    [Fact]
+    public void A_whole_chapter_with_a_part_missing_is_not_covered()
+    {
+        var rows = new[] { R(1, 1), R(2, 1.1m, file: true), R(3, 1.2m) };
+
+        Assert.Empty(ChapterPartCoverage.CoveredWholes(rows));
+    }
+
+    [Fact]
+    public void A_whole_chapter_that_has_its_own_file_is_not_listed_as_covered()
+    {
+        var rows = new[] { R(1, 1, file: true), R(2, 1.1m, file: true), R(3, 1.2m, file: true) };
+
+        Assert.Empty(ChapterPartCoverage.CoveredWholes(rows));
+    }
+
+    [Fact]
+    public void A_lone_extra_does_not_cover_its_whole_chapter()
+    {
+        var rows = new[] { R(1, 3), R(2, 3.5m, file: true) };
+
+        Assert.Empty(ChapterPartCoverage.CoveredWholes(rows));
+    }
 }

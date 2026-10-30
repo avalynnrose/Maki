@@ -1047,11 +1047,13 @@ public class SeriesController(
         IReadOnlyList<int> missingMain = [];
         if (series.TotalChapters is > 0 and var expected)
         {
-            var withFileNumbers = await db.Chapters.AsNoTracking()
-                .Where(c => c.SeriesId == id && c.ChapterFileId != null && c.Number != null)
-                .Select(c => c.Number!.Value)
-                .ToListAsync(ct);
-            (var collected, missingMain) = ChapterCollection.Collected(withFileNumbers, expected);
+            var numbered = (await db.Chapters.AsNoTracking()
+                .Where(c => c.SeriesId == id && c.Number != null)
+                .Select(c => new { Number = c.Number!.Value, HasFile = c.ChapterFileId != null })
+                .ToListAsync(ct))
+                .Select(c => (c.Number, c.HasFile))
+                .ToList();
+            (var collected, missingMain) = ChapterCollection.Collected(numbered, expected);
             collectedMain = collected;
         }
 
