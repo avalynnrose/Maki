@@ -112,6 +112,39 @@ public class SuwayomiSourceTests
     }
 
     [Fact]
+    public async Task A_label_that_names_a_chapter_wins_over_a_number_the_extension_counted_by_position()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "第2話①", 3, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "第2話②", 4, sourceOrder: 2),
+            SuwayomiHarness.Chapter(3, "/c/3", "第27話-1", 42, sourceOrder: 3),
+            SuwayomiHarness.Chapter(4, "/c/4", "第27話-2", 43, sourceOrder: 4),
+            SuwayomiHarness.Chapter(5, "/c/5", "Ch. 5", 7, sourceOrder: 5));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal([2.1m, 2.2m, 5m, 27.1m, 27.2m], chapters.Select(c => c.Number).ToArray());
+    }
+
+    [Fact]
+    public async Task Ebook_volume_editions_are_volume_rows_not_chapters()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "１【電子限定特典付き】", -1, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "２【電子限定特典付き】", 2, sourceOrder: 2),
+            SuwayomiHarness.Chapter(3, "/c/3", "(Volume) 隣のステラ（３）", -1, sourceOrder: 3));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.All(chapters, c => Assert.Null(c.Number));
+        Assert.Equal([1, 2, 3], chapters.Select(c => c.Volume!.Value).Order().ToArray());
+    }
+
+    [Fact]
     public async Task A_volume_label_stays_a_volume_whatever_number_the_extension_gives_it()
     {
         var h = new SuwayomiHarness();
@@ -137,7 +170,7 @@ public class SuwayomiSourceTests
             SuwayomiHarness.Chapter(1, "/c/1", "第1話: 第1話", -1, sourceOrder: 1),
             SuwayomiHarness.Chapter(2, "/c/2", "ｅｐｉｓｏｄｅ２\u3000ホットケーキ（１）", -1, sourceOrder: 2),
             SuwayomiHarness.Chapter(3, "/c/3", "ｅｐｉｓｏｄｅ２\u3000ホットケーキ（２）", -1, sourceOrder: 3),
-            SuwayomiHarness.Chapter(4, "/c/4", "Ch. 5", 7, sourceOrder: 4));
+            SuwayomiHarness.Chapter(4, "/c/4", "Special", 7, sourceOrder: 4));
 
         var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
 

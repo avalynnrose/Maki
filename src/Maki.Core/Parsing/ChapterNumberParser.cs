@@ -44,6 +44,14 @@ public static partial class ChapterNumberParser
     [GeneratedRegex(@"([0-9]+)\s*巻")]
     private static partial Regex JapaneseVolumePattern();
 
+    // "(Volume) 隣のステラ(1)": a source that marks its volume rows with the word.
+    [GeneratedRegex(@"^\s*\(volume\)\s*[^0-9]*[(（]?\s*([0-9]+)\s*[)）]?\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex VolumeMarkedPattern();
+
+    // "1【電子限定特典付き】", "スタジオカバナ9【電子限定特典付き】", "(1)【電子限定特典付】": an ebook volume edition, a number and a bonus note.
+    [GeneratedRegex(@"^\s*[^0-9【】]{0,40}[(（]?\s*([0-9]+)\s*[)）]?\s*【[^】]*(?:特典|電子|限定)[^】]*】\s*$")]
+    private static partial Regex VolumeEditionPattern();
+
     // The part of a split chapter: "(2)" or "-2" closing the label, after the chapter marker.
     [GeneratedRegex(@"(?:[(（]\s*([0-9]{1,2})\s*[)）]|(?<=[話0-9])\s*[-ー]\s*([0-9]{1,2}))\s*[)】\]]?\s*$")]
     private static partial Regex PartPattern();
@@ -129,6 +137,20 @@ public static partial class ChapterNumberParser
             int.TryParse(tankobon.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tankobonVolume))
         {
             volume = tankobonVolume;
+        }
+
+        if (volume is null)
+        {
+            var edition = VolumeMarkedPattern().Match(text);
+            if (!edition.Success)
+            {
+                edition = VolumeEditionPattern().Match(text);
+            }
+
+            if (edition.Success && int.TryParse(edition.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var editionVolume))
+            {
+                volume = editionVolume;
+            }
         }
 
         // Unparseable: treat as a one-shot/special so it is not lost. A volume-only row keeps its volume.

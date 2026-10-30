@@ -317,6 +317,28 @@ public sealed partial class SuwayomiSource(
         }
     }
 
+    /// <summary>
+    /// The label wins when it names a chapter: some extensions number their rows by position, so
+    /// "第2話①" and "第2話②" arrive as 3 and 4 and match nothing. The extension's own number is used
+    /// when the label gives none, and a volume label stays a volume whatever number the extension sent.
+    /// </summary>
+    private static decimal? NumberOf(SuwayomiChapter chapter, ParsedChapter parsed)
+    {
+        if (parsed.Number is not null)
+        {
+            return parsed.NumberWithPart;
+        }
+
+        if (parsed is { Volume: not null })
+        {
+            return null;
+        }
+
+        return chapter.ChapterNumber is >= 0 and < (double)ChapterNumberParser.MaxChapterNumber
+            ? (decimal)chapter.ChapterNumber
+            : null;
+    }
+
     private SourceChapter ToSourceChapter(SuwayomiChapter chapter, string seriesUrl, string language)
     {
         var parsed = ChapterNumberParser.Parse(chapter.Name);
@@ -325,7 +347,7 @@ public sealed partial class SuwayomiSource(
             seriesUrl,
             chapter.Url,
             chapter.Name,
-            chapter.ChapterNumber is >= 0 and < (double)ChapterNumberParser.MaxChapterNumber && parsed is not { Number: null, Volume: not null } ? (decimal)chapter.ChapterNumber : parsed.NumberWithPart,
+            NumberOf(chapter, parsed),
             parsed.Volume,
             TitleOf(chapter.Name),
             language,
