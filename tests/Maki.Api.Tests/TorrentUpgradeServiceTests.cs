@@ -519,6 +519,73 @@ public class TorrentUpgradeServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task An_english_release_is_ignored_for_a_series_whose_files_are_japanese()
+    {
+        Chapter(1, 1, language: "ja");
+
+        var view = await EvaluateAsync("Kaguya v01 (2019) (Digital) (1r0n)");
+
+        Assert.Equal(SpanOutcome.Ignore, view.Verdict.Outcome);
+        Assert.Equal([SpanVerdictReasons.LanguageMismatch], view.Verdict.Reasons);
+    }
+
+    [Fact]
+    public async Task A_japanese_release_is_judged_normally_for_a_series_whose_files_are_japanese()
+    {
+        Chapter(1, 1, language: "ja");
+
+        var view = await EvaluateAsync("Kaguya v01 (Digital) (Japanese)");
+
+        Assert.DoesNotContain(SpanVerdictReasons.LanguageMismatch, view.Verdict.Reasons);
+        Assert.NotEqual(SpanOutcome.Ignore, view.Verdict.Outcome);
+    }
+
+    [Fact]
+    public async Task A_japanese_release_is_ignored_for_a_series_whose_files_are_english()
+    {
+        Chapter(1, 1);
+
+        var view = await EvaluateAsync("Kaguya v01 (Digital) [JP]");
+
+        Assert.Equal([SpanVerdictReasons.LanguageMismatch], view.Verdict.Reasons);
+    }
+
+    [Fact]
+    public async Task A_series_in_another_language_is_not_judged_on_language()
+    {
+        Chapter(1, 1, language: "fr");
+
+        var view = await EvaluateAsync("Kaguya v01 (2019) (Digital) (1r0n)");
+
+        Assert.DoesNotContain(SpanVerdictReasons.LanguageMismatch, view.Verdict.Reasons);
+    }
+
+    [Fact]
+    public async Task The_search_leaves_no_proposal_for_a_release_in_the_wrong_language()
+    {
+        Chapter(1, 1, language: "ja");
+        _releases.Results.Add(FakeReleases.Release("Kaguya v01 (2019) (Digital) (1r0n)", size: 900L * 1024 * 1024));
+
+        var result = await SearchAsync();
+
+        Assert.Null(result.ProposalId);
+        Assert.Empty(_releases.Grabs);
+        using var db = _world.Db.NewContext();
+        Assert.Empty(db.TorrentProposals);
+    }
+
+    [Fact]
+    public async Task The_sweep_skips_a_pending_proposal_in_the_wrong_language()
+    {
+        Chapter(1, 1, language: "ja");
+        AutoApprove(true, 5L * 1024 * 1024 * 1024);
+        PendingProposal("Kaguya (2021) (Digital) (danke-Empire)", "[\"whole_series_pack\"]", 100L * 1024 * 1024);
+
+        Assert.Equal(0, await SweepAsync());
+        Assert.Empty(_releases.Grabs);
+    }
+
+    [Fact]
     public async Task A_duplicate_library_entry_is_not_a_rival()
     {
         Chapter(1, 1);

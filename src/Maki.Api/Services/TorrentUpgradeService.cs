@@ -186,6 +186,10 @@ public class TorrentUpgradeService(
             }
 
             verdict = WithMarkersOff(WithRival(verdict, match.Rival), markersOff);
+            if (ReleaseLanguage.Mismatches(library.Language, release.Title))
+            {
+                verdict = verdict with { Outcome = SpanOutcome.Ignore, Reasons = [SpanVerdictReasons.LanguageMismatch] };
+            }
 
             views.Add(new TorrentCandidateView(release, parsed, matched, candidate.Tier, score.Score, verdict, wholeSeries,
                 library.Language, match.Rival));
@@ -524,6 +528,7 @@ public class TorrentUpgradeService(
         }
 
         var approved = 0;
+        var languages = new Dictionary<int, string?>();
         var pending = await db.TorrentProposals.AsNoTracking()
             .Where(p => p.Status == TorrentProposalStatus.Pending)
             .OrderBy(p => p.CreatedAtUtc)
@@ -538,6 +543,18 @@ public class TorrentUpgradeService(
             var reasons = JsonSerializer.Deserialize<string[]>(row.ReasonsJson) ?? [];
             if (!ProposalAutoApproval.Allows(reasons, row.SizeBytes, ReleaseTitleParser.Parse(row.Title).IsDigital,
                     options.AutoApproveMaxBytes))
+            {
+                continue;
+            }
+
+            if (!languages.TryGetValue(row.SeriesId, out var wanted))
+            {
+                wanted = TorrentUpgradeRules.PrimaryLanguage(
+                    await db.Chapters.AsNoTracking().Where(c => c.SeriesId == row.SeriesId).ToListAsync(ct)).Language;
+                languages[row.SeriesId] = wanted;
+            }
+
+            if (ReleaseLanguage.Mismatches(wanted, row.Title))
             {
                 continue;
             }
