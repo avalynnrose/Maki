@@ -35,6 +35,12 @@ public enum SourceMatchState
 /// </summary>
 public readonly record struct SourceMatchStep(string SourceName, SourceMatchState State);
 
+/// <summary>
+/// How a fallback match differs from a normal one: the language it matches in, and the source names
+/// whose existing mappings the caller is replacing in the same save.
+/// </summary>
+public sealed record AutoMatchSwap(SourceLanguagePreference Languages, IReadOnlySet<string> Replacing);
+
 /// <summary>A source that carries a series, as <see cref="SourceMatchService.FindCandidatesAsync"/> finds it.</summary>
 /// <param name="Priority">The source's slot in the effective priority order, lower first.</param>
 public sealed record SourceCandidate(ISource Source, string SourceSeriesId, string? LanguageFilter, int Priority = 0);
@@ -321,6 +327,7 @@ public partial class SourceMatchService(
         List<string> alreadyMapped,
         IReadOnlyDictionary<string, string> crossRefs,
         SourceLanguagePreference languages,
+        string[] replacing,
         CancellationToken ct)
     {
         var seeded = new List<string>();
@@ -339,7 +346,8 @@ public partial class SourceMatchService(
                 continue;
             }
 
-            if (await db.SourceMappings.AnyAsync(m => m.SeriesId == series.Id && m.SourceName == source.Name, ct))
+            if (await db.SourceMappings.AnyAsync(
+                    m => m.SeriesId == series.Id && m.SourceName == source.Name && !replacing.Contains(m.SourceName), ct))
             {
                 continue;
             }
@@ -576,14 +584,15 @@ public partial class SourceMatchService(
         IReadOnlyDictionary<string, SourceOutcome>? known,
         IProgress<SourceMatchStep>? progress,
         CancellationToken ct,
-        Action<SourceOutcome, SourceLanguagePreference>? settled = null)
+        Action<SourceOutcome, SourceLanguagePreference>? settled = null,
+        SourceLanguagePreference? languageOverride = null)
     {
         var baseOrder = OrderSources(
             sourceRegistry.All, await settings.GetAsync(Maki.Core.Configuration.SettingKeys.SourcePriorityOrder, ct));
 
         // Sources publishing none of the enabled languages are dropped here rather than filtered
         // later: a mapping for one could only ever list chapters in a language nobody asked for.
-        var languages = await SourceLanguagePreference.LoadAsync(settings, ct);
+        var languages = languageOverride ?? await SourceLanguagePreference.LoadAsync(settings, ct);
         var orderedSources = SourceLanguagePreference.Rank(baseOrder, languages);
         var disabledSources = await sourceAvailability.DisabledAsync(ct);
 
@@ -676,11 +685,19 @@ public partial class SourceMatchService(
     /// <see cref="SourceMatchState.NoMatch"/> into a mapping, so the finished table remains
     /// authoritative.
     /// </param>
+    /// <param name="swap">
+    /// Matches in another language than the instance's and treats the sources named in
+    /// <see cref="AutoMatchSwap.Replacing"/> as free, because the caller has already staged their
+    /// old mappings for deletion in the same unit of work. Nothing is saved when no source matches,
+    /// so the caller must discard what it staged.
+    /// </param>
     /// <returns>Names of sources that were automatically mapped.</returns>
     public async Task<List<string>> AutoMatchAsync(
-        Series series, CancellationToken ct = default, IProgress<SourceMatchStep>? progress = null)
+        Series series, CancellationToken ct = default, IProgress<SourceMatchStep>? progress = null,
+        AutoMatchSwap? swap = null)
     {
         var mapped = new List<string>();
+        var replacing = swap?.Replacing.ToArray() ?? [];
 
         // Cross-site ids gathered from confirmed matches, spent on the sources nothing matched.
         var crossRefs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -690,21 +707,22 @@ public partial class SourceMatchService(
         // authoritative guard is the re-check in the apply loop, which runs back on this thread.
         var alreadyMapped = new HashSet<string>(
             await db.SourceMappings
-                .Where(m => m.SeriesId == series.Id)
+                .Where(m => m.SeriesId == series.Id && !replacing.Contains(m.SourceName))
                 .Select(m => m.SourceName)
                 .ToListAsync(ct),
             StringComparer.OrdinalIgnoreCase);
 
         // A Discover preview of this series may have searched every source minutes ago.
         var target = MatchTarget.For(series);
-        var known = series.MangaBakaId is { } mangaBakaId ? searchCache.Take(mangaBakaId, target) : null;
+        // The preview searched in the instance's languages, so a fallback match cannot reuse it.
+        var known = swap is null && series.MangaBakaId is { } mangaBakaId ? searchCache.Take(mangaBakaId, target) : null;
         if (known is not null)
         {
             logger.LogInformation("Reusing {Count} source result(s) from the preview of {Title}", known.Count, series.Title);
         }
 
         var (orderedSources, disabledSources, languages, outcomes) =
-            await SearchSourcesAsync(target, alreadyMapped, known, progress, ct);
+            await SearchSourcesAsync(target, alreadyMapped, known, progress, ct, languageOverride: swap?.Languages);
 
         // Back in priority order and back on one thread. Everything from here is order-sensitive:
         // the highest-ranked source has to win a cross-reference disagreement, the mappings have to
@@ -719,7 +737,8 @@ public partial class SourceMatchService(
             // The snapshot above is a few seconds old by now; a source linked by hand while the
             // searches ran would otherwise collide on (SeriesId, SourceName) and fail the batch.
             if (await db.SourceMappings.AnyAsync(
-                    m => m.SeriesId == series.Id && m.SourceName == outcome.Source.Name, ct))
+                    m => m.SeriesId == series.Id && m.SourceName == outcome.Source.Name &&
+                         !replacing.Contains(m.SourceName), ct))
             {
                 continue;
             }
@@ -758,7 +777,7 @@ public partial class SourceMatchService(
         }
 
         mapped.AddRange(await SeedFromCrossRefsAsync(
-            series, orderedSources, disabledSources, mapped, crossRefs, languages, ct));
+            series, orderedSources, disabledSources, mapped, crossRefs, languages, replacing, ct));
 
         if (mapped.Count == 0)
         {

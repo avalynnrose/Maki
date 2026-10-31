@@ -5,6 +5,7 @@ using Maki.Core.Entities;
 using Maki.Core.Inbox;
 using Maki.Core.Notifications;
 using Maki.Core.Paths;
+using Maki.Core.Quality;
 using Maki.Data;
 using Microsoft.EntityFrameworkCore;
 using Quartz;
@@ -215,10 +216,29 @@ public class SourceMatchWorkerHostedService(
             var matcher = scope.ServiceProvider.GetRequiredService<SourceMatchService>();
             mapped = await matcher.AutoMatchAsync(series, ct, progress);
 
+            // Only when every source answered: an outage makes every search fail, and that says
+            // nothing about whether the primary language has the series.
+            var fellBack = false;
+            if (mapped.Count == 0 && !progress.Failed.Any() &&
+                scope.ServiceProvider.GetService<LanguageFallbackService>() is { } fallbackService)
+            {
+                var fallback = await fallbackService.FallBackAsync(series.Id, LanguageFallbackReason.NoSource, ct);
+                if (fallback.Outcome == LanguageFallbackOutcome.Applied)
+                {
+                    mapped = [.. fallback.Mapped];
+                    fellBack = true;
+                    await db.Entry(series).ReloadAsync(ct);
+                }
+            }
+
             if (mapped.Count > 0)
             {
-                var sync = scope.ServiceProvider.GetRequiredService<ChapterSyncService>();
-                await sync.SyncSeriesAsync(series.Id, ct);
+                if (!fellBack)
+                {
+                    var sync = scope.ServiceProvider.GetRequiredService<ChapterSyncService>();
+                    await sync.SyncSeriesAsync(series.Id, ct);
+                }
+
                 await scope.ServiceProvider.GetRequiredService<SourceScoutService>()
                     .StartIfEnabledAsync(db, series.Id, ct);
                 await SearchVolumesFirstAsync(scope.ServiceProvider, series.Id, ct);

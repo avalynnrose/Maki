@@ -2734,6 +2734,68 @@ msgstr "未知语言代码：{codes}"
 msgid "error.settings.noSourceLanguageEnabled"
 msgstr "必须至少启用一种语言"
 
+#. {code} is a language code.
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: {code} is already one of the enabled languages, so it cannot also be the fallback
+msgid "error.settings.fallbackLanguageIsPrimary"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: Pick the root folder that holds fallback series
+msgid "error.settings.fallbackRootFolderRequired"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: That root folder does not exist
+msgid "error.settings.fallbackRootFolderNotFound"
+msgstr ""
+
+#. {path} is the root folder's path inside the container.
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: Maki cannot reach {path}. Check that the folder exists and is mounted.
+msgid "error.settings.fallbackRootFolderUnreachable"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: This series did not fall back to another language
+msgid "error.languageFallback.notInFallback"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: The root folder this series came from no longer exists
+msgid "error.languageFallback.originalRootFolderMissing"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: This series already has files, so its language cannot be switched back
+msgid "error.languageFallback.hasFiles"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: Somebody has already read part of this series, so its language cannot be switched back
+msgid "error.languageFallback.hasReadingState"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: A download for this series is running. Try again when it has finished.
+msgid "error.languageFallback.downloadInFlight"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: A source was linked to this series by hand, so its language is left alone
+msgid "error.languageFallback.manualMapping"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: No source carries this series in the primary language, so it stays as it is
+msgid "error.languageFallback.noSource"
+msgstr ""
+
+#: src/Maki.Api/Controllers/LanguageFallbackController.cs
+#. English: Could not switch the language. Nothing was changed.
+msgid "error.languageFallback.failed"
+msgstr ""
+
 #. {service} is the indexer backend's product name (Prowlarr, Jackett), never translated.
 #: src/Maki.Api/Controllers/SettingsController.cs
 #. English: {service} is not configured
@@ -3750,6 +3812,39 @@ msgstr "来源无法搜索"
 #, fuzzy
 msgid "inbox.sourceMatch.failed.body"
 msgstr "{series}：没有匹配结果，且 {failed} 无法搜索。待其恢复后请再次匹配。"
+
+#: src/Maki.Api/Services/LanguageFallbackService.cs
+#. English: Using a fallback language
+msgid "inbox.languageFallback.noSource.title"
+msgstr ""
+
+#. {language} is a language code; {sources} is a comma-separated list of site names, none of which are translated.
+#: src/Maki.Api/Services/LanguageFallbackService.cs
+#. English: {series}: no source has it in the main language, so it now uses {language} from {sources}
+msgid "inbox.languageFallback.noSource.body"
+msgstr ""
+
+#: src/Maki.Api/Services/LanguageFallbackService.cs
+#. English: Using a fallback language
+msgid "inbox.languageFallback.previews.title"
+msgstr ""
+
+#. {language} is a language code; {sources} is a comma-separated list of site names, none of which are translated.
+#: src/Maki.Api/Services/LanguageFallbackService.cs
+#. English: {series}: the sources in the main language only serve previews, so it now uses {language} from {sources}
+msgid "inbox.languageFallback.previews.body"
+msgstr ""
+
+#: src/Maki.Api/Services/LanguageFallbackService.cs
+#. English: Back to the main language
+msgid "inbox.languageFallback.reverted.title"
+msgstr ""
+
+#. {sources} is a comma-separated list of site names, none of which are translated.
+#: src/Maki.Api/Services/LanguageFallbackService.cs
+#. English: {series}: switched back to the main language, matched {sources}
+msgid "inbox.languageFallback.reverted.body"
+msgstr ""
 
 #: src/Maki.Api/Services/ImportListService.cs
 #. English: Import list finished

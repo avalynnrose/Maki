@@ -868,6 +868,7 @@ try
     builder.Services.AddSingleton<SourceMatchSearchCache>();
     builder.Services.AddSingleton<SourceOrderService>();
     builder.Services.AddSingleton<SourceScoutService>();
+    builder.Services.AddSingleton<LanguageFallbackService>();
     builder.Services.AddSingleton<UpgradeScanTracker>();
     builder.Services.AddSingleton<ChapterSourceResolver>();
     builder.Services.AddSingleton<DownloadPauseService>();

@@ -833,6 +833,22 @@ public static class SettingKeys
     /// </summary>
     public const string SourceLanguagesDisabled = "sources.languagesdisabled";
 
+    /// <summary>
+    /// Language code of the optional fallback (e.g. "en"). Empty or unset turns the fallback off.
+    /// Read through <c>LanguageFallbackService</c>, never parsed at the call site.
+    /// </summary>
+    public const string SourceFallbackLanguage = "sources.fallback.language";
+
+    /// <summary>Id of the root folder that holds series which fell back. Required while a fallback language is set.</summary>
+    public const string SourceFallbackRootFolderId = "sources.fallback.rootfolderid";
+
+    /// <summary>
+    /// Prefix of the per-series record of a fallback ("sources.fallback.series.{id}"): why it happened
+    /// and the root folder the series came from, so "try the primary language again" can put it back.
+    /// Kept as settings rather than columns so the database schema is unchanged.
+    /// </summary>
+    public const string SourceFallbackSeriesPrefix = "sources.fallback.series.";
+
     /// <summary>"false" → the automatic sweep that re-queues Failed scraper downloads is disabled. Default on.</summary>
     public const string DownloadRetryEnabled = "download.retryenabled";
 

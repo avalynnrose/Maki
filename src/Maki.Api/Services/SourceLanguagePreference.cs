@@ -35,6 +35,9 @@ public record SourceLanguagePreference(IReadOnlyList<string> Order, IReadOnlyLis
             ? enabled
             : [SourceLanguages.Default];
 
+    /// <summary>A preference whose only enabled language is <paramref name="code"/>, for the fallback.</summary>
+    public static SourceLanguagePreference ForLanguage(string code) => new([code], []);
+
     public static SourceLanguagePreference Parse(string? orderCsv, string? disabledCsv) =>
         new(SourceAvailability.Parse(orderCsv), SourceAvailability.Parse(disabledCsv));
 

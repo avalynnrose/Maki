@@ -41,6 +41,7 @@ public sealed class SourceScoutService(
     private const int MaxConcurrentSeries = 2;
     private const int MaxParallelSources = 3;
     private static readonly TimeSpan Deadline = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan FallbackDeadline = TimeSpan.FromMinutes(5);
 
     private readonly ConcurrentDictionary<int, Job> _jobs = new();
     private readonly SemaphoreSlim _gate = new(MaxConcurrentSeries);
@@ -126,12 +127,14 @@ public sealed class SourceScoutService(
     {
         using var cts = new CancellationTokenSource(Deadline);
         var ct = cts.Token;
+        var completed = false;
         try
         {
             await _gate.WaitAsync(ct);
             try
             {
                 await ScoutAsync(seriesId, job, ct);
+                completed = true;
             }
             finally
             {
@@ -146,6 +149,35 @@ public sealed class SourceScoutService(
         {
             job.FinishedAtUtc = DateTime.UtcNow;
             job.Running = false;
+        }
+
+        if (completed)
+        {
+            await ConsiderFallbackAsync(seriesId);
+        }
+    }
+
+    /// <summary>
+    /// A finished measurement can show that every primary-language source only serves previews,
+    /// which is what the optional language fallback acts on. Runs after the job is marked finished,
+    /// so the series page does not keep showing it as measuring while the fallback searches.
+    /// </summary>
+    private async Task ConsiderFallbackAsync(int seriesId)
+    {
+        try
+        {
+            using var scope = scopes.CreateScope();
+            if (scope.ServiceProvider.GetService<LanguageFallbackService>() is not { } fallback)
+            {
+                return;
+            }
+
+            using var cts = new CancellationTokenSource(FallbackDeadline);
+            await fallback.EvaluateAfterScoutAsync(seriesId, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Checking the language fallback for series {SeriesId} failed", seriesId);
         }
     }
 
