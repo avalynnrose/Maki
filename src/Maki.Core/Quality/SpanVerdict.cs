@@ -93,7 +93,11 @@ public static class SpanVerdicts
         if (!input.TitleMatched) return Verdict(SpanOutcome.Ignore, [SpanVerdictReasons.TitleUncertain]);
         // A release that only adds chapters is of no use to an upgrade scan, but it is exactly what a
         // series with no files is looking for when volume releases are tried first.
-        if (upgrade == 0 && !(input.MissingOnlyOk && Count(ChapterSpanState.Missing) > 0))
+        // Chapter rows with no volume number cannot say which chapters a volume covers, so such a release
+        // looks like it replaces nothing; where adding is welcome it waits for a click instead (the
+        // volume_span_unknown reason below, which automatic approval never accepts).
+        var mappingUnknown = input.MissingOnlyOk && input.Span.Volumes is not null && !input.VolumeMappingKnown;
+        if (upgrade == 0 && !(input.MissingOnlyOk && Count(ChapterSpanState.Missing) > 0) && !mappingUnknown)
         {
             return Verdict(SpanOutcome.Ignore, [SpanVerdictReasons.NothingToUpgrade]);
         }
