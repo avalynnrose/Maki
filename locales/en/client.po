@@ -3972,10 +3972,6 @@ msgid "Chapters downloaded automatically"
 msgstr "Chapters downloaded automatically"
 
 #: src/pages/SeriesDetailPage.tsx
-#~ msgid "Chapters known"
-#~ msgstr "Chapters known"
-
-#: src/pages/SeriesDetailPage.tsx
 msgid "Chapters listed by sources"
 msgstr "Chapters listed by sources"
 
@@ -4904,6 +4900,10 @@ msgstr "Create new tags from \"Manage tags\"."
 #: src/pages/SetupAccountPage.tsx
 msgid "Create the administrator account. Your library and reading history, if you have any, are already attached to it."
 msgstr "Create the administrator account. Your library and reading history, if you have any, are already attached to it."
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Create the folder and mount it into the container first."
+msgstr "Create the folder and mount it into the container first."
 
 #: src/pages/SetupAccountPage.tsx
 msgid "Create your account"
@@ -6202,6 +6202,20 @@ msgstr "Failed to update tags: {detail}"
 #: src/pages/settings/ManageSourcesModal.tsx
 msgid "Fair quality"
 msgstr "Fair quality"
+
+#: src/pages/settings/DownloadCards.tsx
+#: src/pages/settings/registry.ts
+msgid "Fallback language"
+msgstr "Fallback language"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Fallback language: {language}"
+msgstr "Fallback language: {language}"
+
+#. Search terms for the settings command palette, not prose. Translate each term as the word someone would actually type in this language, keep them comma-separated, and add or drop terms freely: the list does not have to match English item for item.
+#: src/pages/settings/registry.ts
+msgid "fallback, fallback language, english fallback, no source, previews, second language, other language"
+msgstr "fallback, fallback language, english fallback, no source, previews, second language, other language"
 
 #: src/pages/discover/TasteTab.tsx
 msgid "Falling means you moved."
@@ -8532,6 +8546,10 @@ msgstr "Maki can't reach the server. Home comes back as soon as it does."
 msgid "Maki can't reach this folder"
 msgstr "Maki can't reach this folder"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Maki cannot reach the saved root folder, so the fallback is not running. Check that it is mounted."
+msgstr "Maki cannot reach the saved root folder, so the fallback is not running. Check that it is mounted."
+
 #: src/components/RelinkFilesModal.tsx
 msgid "Maki checked the folder against the chapter list. Tick what to trust and watch the map. Nothing changes until you press Relink."
 msgstr "Maki checked the folder against the chapter list. Tick what to trust and watch the map. Nothing changes until you press Relink."
@@ -9809,6 +9827,10 @@ msgstr "No results."
 msgid "No reviews on MyAnimeList yet."
 msgstr "No reviews on MyAnimeList yet."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "No root folder is set, so the fallback is not running."
+msgstr "No root folder is set, so the fallback is not running."
+
 #: src/pages/ImportPage.tsx
 msgid "No root folders yet"
 msgstr "No root folders yet"
@@ -9845,6 +9867,10 @@ msgstr "No source has listed this series' chapters yet, so there is no total to 
 #: src/api/queue.ts
 msgid "No source has this chapter right now"
 msgstr "No source has this chapter right now"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "No source has this series in your main language, so it uses the fallback language."
+msgstr "No source has this series in your main language, so it uses the fallback language."
 
 #: src/pages/LibraryPage.tsx
 msgid "No sources linked"
@@ -11145,12 +11171,14 @@ msgstr "Phone reader"
 msgid "Pick a chapter language first"
 msgstr "Pick a chapter language first"
 
+#: src/pages/settings/DownloadCards.tsx
 #: src/pages/settings/ManageSourcesModal.tsx
 msgid "Pick a language"
 msgstr "Pick a language"
 
 #: src/pages/LibraryPage.tsx
 #: src/pages/SeriesDetailPage.tsx
+#: src/pages/settings/DownloadCards.tsx
 msgid "Pick a root folder"
 msgstr "Pick a root folder"
 
@@ -11169,6 +11197,10 @@ msgstr "Pick a time in the future"
 #: src/components/settings/UpgradeProfilesSection.tsx
 msgid "Pick another default profile first"
 msgstr "Pick another default profile first"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Pick both a language and a root folder."
+msgstr "Pick both a language and a root folder."
 
 #: src/pages/settings/ManageSourcesModal.tsx
 msgid "Pick languages"
@@ -12929,6 +12961,10 @@ msgstr "Romanized"
 #: src/pages/RequestsPage.tsx
 msgid "Root folder"
 msgstr "Root folder"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Root folder for fallback series"
+msgstr "Root folder for fallback series"
 
 #: src/components/settings/UsersSection.tsx
 #: src/pages/settings/LibraryCards.tsx
@@ -14748,6 +14784,10 @@ msgstr "suwayomi, tachidesk, mihon, tachiyomi, extensions, extension sources, mo
 msgid "Switch reading direction"
 msgstr "Switch reading direction"
 
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Switched back to your main language"
+msgstr "Switched back to your main language"
+
 #: src/components/RecommendationModelSwitch.tsx
 msgid "Switching model… downloading the model and its index."
 msgstr "Switching model… downloading the model and its index."
@@ -15223,6 +15263,10 @@ msgstr "The sample download failed"
 msgid "The saved chapters wouldn't open"
 msgstr "The saved chapters wouldn't open"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "The saved root folder no longer exists, so the fallback is not running."
+msgstr "The saved root folder no longer exists, so the fallback is not running."
+
 #: src/components/import/IgnoredFoldersModal.tsx
 msgid "The scan skips these folders without searching for them."
 msgstr "The scan skips these folders without searching for them."
@@ -15299,6 +15343,10 @@ msgstr "The source returned no pages"
 #: src/api/queue.ts
 msgid "The source you picked could not provide this chapter"
 msgstr "The source you picked could not provide this chapter"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "The sources in your main language only serve previews, so this series uses the fallback language."
+msgstr "The sources in your main language only serve previews, so this series uses the fallback language."
 
 #: src/pages/discover/TasteTab.tsx
 msgid "The specific things that keep coming back in your library, each with more of the same beside it."
@@ -15935,6 +15983,10 @@ msgstr "Try again"
 msgid "Try clearing the filters."
 msgstr "Try clearing the filters."
 
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Try the main language again"
+msgstr "Try the main language again"
+
 #: src/components/discover/PreviewChapterButton.tsx
 msgid "Try the preview again"
 msgstr "Try the preview again"
@@ -16415,6 +16467,10 @@ msgstr "URL"
 #: src/pages/ScrobblePage.tsx
 msgid "Use"
 msgstr "Use"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Use a fallback language"
+msgstr "Use a fallback language"
 
 #: src/pages/LoginPage.tsx
 msgid "Use a recovery code"
@@ -16914,6 +16970,10 @@ msgstr "What's new on the server can wait. These chapters are saved on this devi
 #: src/pages/ScrobblePage.tsx
 msgid "When"
 msgstr "When"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "When a new series has no source in your languages, or every source only serves previews, Maki can use another language for that series instead. It only happens while the series has no files, it goes into its own root folder, and you can switch it back from the series page. Series that have a usable source never use the fallback."
+msgstr "When a new series has no source in your languages, or every source only serves previews, Maki can use another language for that series instead. It only happens while the series has no files, it goes into its own root folder, and you can switch it back from the series page. Series that have a usable source never use the fallback."
 
 #: src/pages/settings/DownloadCards.tsx
 msgid "When a refresh finds more new chapters for a series than this, none of them are queued. That usually means a source renumbered or backfilled its list, not a real release. They stay wanted, so you can download them from the series page. 0 means always queue."

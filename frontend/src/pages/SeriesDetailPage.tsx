@@ -151,6 +151,7 @@ import { SeriesFilesSection } from '../components/SeriesFilesSection'
 import { SeriesTagsEditor } from '../components/SeriesTagsEditor'
 import { SeriesScrobbleSection } from '../components/SeriesScrobbleSection'
 import { SourceMappingsSection } from '../components/SourceMappingsSection'
+import { LanguageFallbackNotice } from '../components/LanguageFallbackNotice'
 import { ReleaseOutlookSummary } from '../components/releases/ReleaseOutlookSummary'
 import { SourceCompareModal } from '../components/SourceCompareModal'
 import type { PickChapter } from '../components/SourceCompareModal'
@@ -2066,6 +2067,7 @@ function SeriesDetailBody() {
                   )}
                   {canManageSources && (
                     <>
+                      <LanguageFallbackNotice seriesId={seriesId} />
                       <SourceMappingsSection
                           seriesId={seriesId}
                           seriesTitle={series.title}

@@ -27,6 +27,9 @@ import {
   useSaveIndexerOptions,
   useSaveReadFileCleanupSettings,
   useSaveSourceLanguages,
+  useLanguageFallbackSettings,
+  useRootFolders,
+  useSaveLanguageFallbackSettings,
   type SourceOrderMode,
   useSourceLanguages,
   useSourcePriority,
@@ -110,6 +113,117 @@ export function SourceLanguageSection() {
           <Trans>At least one language must stay enabled.</Trans>
         </Text>
       )}
+    </SettingsSection>
+  )
+}
+
+export function LanguageFallbackSection() {
+  const { t } = useLingui()
+  const { data: saved } = useLanguageFallbackSettings()
+  const { data: languages } = useSourceLanguages()
+  const { data: rootFolders } = useRootFolders()
+  const save = useSaveLanguageFallbackSettings()
+  const [on, setOn] = useState(false)
+  const [language, setLanguage] = useState<string | null>(null)
+  const [rootFolderId, setRootFolderId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (saved) {
+      setOn(saved.language !== '')
+      setLanguage(saved.language || null)
+      setRootFolderId(saved.rootFolderId === null ? null : String(saved.rootFolderId))
+    }
+  }, [saved])
+
+  const primary = languages ? languages.order.filter((c) => !languages.disabled.includes(c)) : []
+  const languageOptions = (languages?.available ?? [])
+    .filter((code) => !primary.includes(code))
+    .map((code) => ({ value: code, label: languageName(code) ?? code }))
+  const folderOptions = (rootFolders ?? []).map((r) => ({ value: String(r.id), label: r.path }))
+  const incomplete = on && (!language || !rootFolderId)
+  const dirty =
+    saved !== undefined &&
+    (on !== (saved.language !== '') ||
+      (on && (language !== saved.language || rootFolderId !== (saved.rootFolderId === null ? null : String(saved.rootFolderId)))))
+  const problem =
+    saved?.problem === 'rootFolderNotSet'
+      ? t`No root folder is set, so the fallback is not running.`
+      : saved?.problem === 'rootFolderMissing'
+        ? t`The saved root folder no longer exists, so the fallback is not running.`
+        : saved?.problem === 'rootFolderUnreachable'
+          ? t`Maki cannot reach the saved root folder, so the fallback is not running. Check that it is mounted.`
+          : null
+
+  return (
+    <SettingsSection
+      id="language-fallback"
+      title={<Trans>Fallback language</Trans>}
+      description={
+        <Trans>
+          When a new series has no source in your languages, or every source only serves previews,
+          Maki can use another language for that series instead. It only happens while the series
+          has no files, it goes into its own root folder, and you can switch it back from the
+          series page. Series that have a usable source never use the fallback.
+        </Trans>
+      }
+      dirty={dirty}
+      saving={save.isPending}
+      saveDisabled={incomplete}
+      onDiscard={() => {
+        if (!saved) return
+        setOn(saved.language !== '')
+        setLanguage(saved.language || null)
+        setRootFolderId(saved.rootFolderId === null ? null : String(saved.rootFolderId))
+      }}
+      onSave={() =>
+        save.mutate(
+          {
+            language: on ? (language ?? '') : '',
+            rootFolderId: rootFolderId === null ? null : Number(rootFolderId),
+          },
+          { onSuccess: () => notifications.show({ message: now`Saved`, color: 'var(--ok)' }) },
+        )
+      }
+    >
+      <Stack gap="md">
+        <Switch
+          checked={on}
+          onChange={(e) => setOn(e.currentTarget.checked)}
+          label={<Trans>Use a fallback language</Trans>}
+        />
+        {on && (
+          <>
+            <Select
+              label={t`Fallback language`}
+              placeholder={t`Pick a language`}
+              data={languageOptions}
+              value={language}
+              onChange={setLanguage}
+              searchable
+              allowDeselect={false}
+            />
+            <Select
+              label={t`Root folder for fallback series`}
+              description={t`Create the folder and mount it into the container first.`}
+              placeholder={t`Pick a root folder`}
+              data={folderOptions}
+              value={rootFolderId}
+              onChange={setRootFolderId}
+              allowDeselect={false}
+            />
+            {incomplete && (
+              <Text size="sm" c="var(--danger)">
+                <Trans>Pick both a language and a root folder.</Trans>
+              </Text>
+            )}
+          </>
+        )}
+        {problem && (
+          <Text size="sm" c="var(--danger)">
+            {problem}
+          </Text>
+        )}
+      </Stack>
     </SettingsSection>
   )
 }

@@ -390,6 +390,16 @@ export const SETTINGS_ENTRIES: SettingsEntry[] = [
     }),
   },
   {
+    id: 'language-fallback',
+    tab: 'downloads',
+    title: msg`Fallback language`,
+    admin: true,
+    keywords: msg({
+      message: `fallback, fallback language, english fallback, no source, previews, second language, other language`,
+      comment: `Search terms for the settings command palette, not prose. Translate each term as the word someone would actually type in this language, keep them comma-separated, and add or drop terms freely: the list does not have to match English item for item.`,
+    }),
+  },
+  {
     id: 'sources',
     tab: 'downloads',
     title: msg`Sources`,

@@ -4894,11 +4894,6 @@ msgid "Chapters downloaded automatically"
 msgstr "Chapitres téléchargés automatiquement"
 
 #: src/pages/SeriesDetailPage.tsx
-#, fuzzy
-#~ msgid "Chapters known"
-#~ msgstr "Chapitres connus"
-
-#: src/pages/SeriesDetailPage.tsx
 msgid "Chapters listed by sources"
 msgstr ""
 
@@ -6038,6 +6033,10 @@ msgstr "Créez de nouveaux tags depuis « Gérer les tags »"
 #, fuzzy
 msgid "Create the administrator account. Your library and reading history, if you have any, are already attached to it."
 msgstr "Créez le compte administrateur. Votre bibliothèque et votre historique de lecture, s'ils existent, y sont déjà associés."
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Create the folder and mount it into the container first."
+msgstr ""
 
 #: src/pages/SetupAccountPage.tsx
 #, fuzzy
@@ -7638,6 +7637,20 @@ msgstr "Échec de la mise à jour des tags : {detail}"
 #, fuzzy
 msgid "Fair quality"
 msgstr "Qualité correcte"
+
+#: src/pages/settings/DownloadCards.tsx
+#: src/pages/settings/registry.ts
+msgid "Fallback language"
+msgstr ""
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Fallback language: {language}"
+msgstr ""
+
+#. Search terms for the settings command palette, not prose. Translate each term as the word someone would actually type in this language, keep them comma-separated, and add or drop terms freely: the list does not have to match English item for item.
+#: src/pages/settings/registry.ts
+msgid "fallback, fallback language, english fallback, no source, previews, second language, other language"
+msgstr ""
 
 #: src/pages/discover/TasteTab.tsx
 #, fuzzy
@@ -10512,6 +10525,10 @@ msgstr "Maki ne parvient pas à joindre le serveur. Accueil reviendra dès que c
 msgid "Maki can't reach this folder"
 msgstr "Maki ne peut pas accéder à ce dossier"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Maki cannot reach the saved root folder, so the fallback is not running. Check that it is mounted."
+msgstr ""
+
 #: src/components/RelinkFilesModal.tsx
 #, fuzzy
 msgid "Maki checked the folder against the chapter list. Tick what to trust and watch the map. Nothing changes until you press Relink."
@@ -12085,6 +12102,10 @@ msgstr "Aucun résultat."
 msgid "No reviews on MyAnimeList yet."
 msgstr "Pas encore d'avis sur MyAnimeList."
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "No root folder is set, so the fallback is not running."
+msgstr ""
+
 #: src/pages/ImportPage.tsx
 #, fuzzy
 msgid "No root folders yet"
@@ -12130,6 +12151,10 @@ msgstr "Aucune source n'a encore listé les chapitres de cette série, il n'y a 
 #, fuzzy
 msgid "No source has this chapter right now"
 msgstr "Aucune source ne propose ce chapitre pour le moment"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "No source has this series in your main language, so it uses the fallback language."
+msgstr ""
 
 #: src/pages/LibraryPage.tsx
 #, fuzzy
@@ -13735,6 +13760,7 @@ msgstr "Lecteur sur téléphone"
 msgid "Pick a chapter language first"
 msgstr "Choisissez d'abord une langue des chapitres"
 
+#: src/pages/settings/DownloadCards.tsx
 #: src/pages/settings/ManageSourcesModal.tsx
 #, fuzzy
 msgid "Pick a language"
@@ -13742,6 +13768,7 @@ msgstr "Choisir une langue"
 
 #: src/pages/LibraryPage.tsx
 #: src/pages/SeriesDetailPage.tsx
+#: src/pages/settings/DownloadCards.tsx
 #, fuzzy
 msgid "Pick a root folder"
 msgstr "Choisir un dossier racine"
@@ -13765,6 +13792,10 @@ msgstr "Choisissez une heure à venir"
 #, fuzzy
 msgid "Pick another default profile first"
 msgstr "Choisissez d'abord un autre profil par défaut"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Pick both a language and a root folder."
+msgstr ""
 
 #: src/pages/settings/ManageSourcesModal.tsx
 #, fuzzy
@@ -15933,6 +15964,10 @@ msgstr "Romanisé"
 #, fuzzy
 msgid "Root folder"
 msgstr "Dossier racine"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Root folder for fallback series"
+msgstr ""
 
 #: src/components/settings/UsersSection.tsx
 #: src/pages/settings/LibraryCards.tsx
@@ -18173,6 +18208,10 @@ msgstr "suwayomi, tachidesk, mihon, tachiyomi, extensions, sources d'extensions,
 msgid "Switch reading direction"
 msgstr "Changer le sens de lecture"
 
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Switched back to your main language"
+msgstr ""
+
 #: src/components/RecommendationModelSwitch.tsx
 #, fuzzy
 msgid "Switching model… downloading the model and its index."
@@ -18762,6 +18801,10 @@ msgstr "Le téléchargement de l'échantillon a échoué"
 msgid "The saved chapters wouldn't open"
 msgstr "Les chapitres enregistrés ne s'ouvrent pas"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "The saved root folder no longer exists, so the fallback is not running."
+msgstr ""
+
 #: src/components/import/IgnoredFoldersModal.tsx
 #, fuzzy
 msgid "The scan skips these folders without searching for them."
@@ -18857,6 +18900,10 @@ msgstr "La source n'a renvoyé aucune page"
 #, fuzzy
 msgid "The source you picked could not provide this chapter"
 msgstr "La source choisie n'a pas pu fournir ce chapitre"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "The sources in your main language only serve previews, so this series uses the fallback language."
+msgstr ""
 
 #: src/pages/discover/TasteTab.tsx
 #, fuzzy
@@ -19643,6 +19690,10 @@ msgstr "Réessayer"
 msgid "Try clearing the filters."
 msgstr "Essayez d'effacer les filtres."
 
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Try the main language again"
+msgstr ""
+
 #: src/components/discover/PreviewChapterButton.tsx
 #, fuzzy
 msgid "Try the preview again"
@@ -20234,6 +20285,10 @@ msgstr "URL"
 #, fuzzy
 msgid "Use"
 msgstr "Utiliser"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Use a fallback language"
+msgstr ""
 
 #: src/pages/LoginPage.tsx
 #, fuzzy
@@ -20852,6 +20907,10 @@ msgstr "Les nouveautés du serveur peuvent attendre. Ces chapitres sont enregist
 #, fuzzy
 msgid "When"
 msgstr "Quand"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "When a new series has no source in your languages, or every source only serves previews, Maki can use another language for that series instead. It only happens while the series has no files, it goes into its own root folder, and you can switch it back from the series page. Series that have a usable source never use the fallback."
+msgstr ""
 
 #: src/pages/settings/DownloadCards.tsx
 #, fuzzy

@@ -3800,6 +3800,61 @@ export function useSaveSourceLanguages() {
   })
 }
 
+export interface LanguageFallbackSettings {
+  /** Empty while the fallback is off. */
+  language: string
+  rootFolderId: number | null
+  /** Why the saved settings do not work right now, or null. */
+  problem?: 'rootFolderNotSet' | 'rootFolderMissing' | 'rootFolderUnreachable' | null
+}
+
+export function useLanguageFallbackSettings() {
+  return useQuery({
+    queryKey: ['settings', 'sources', 'fallback'],
+    queryFn: () => api<LanguageFallbackSettings>('/settings/sources/fallback'),
+  })
+}
+
+export function useSaveLanguageFallbackSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (value: LanguageFallbackSettings) =>
+      api<LanguageFallbackSettings>('/settings/sources/fallback', {
+        method: 'PUT',
+        body: JSON.stringify({ language: value.language, rootFolderId: value.rootFolderId }),
+      }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(['settings', 'sources', 'fallback'], saved)
+    },
+  })
+}
+
+export interface SeriesLanguageFallback {
+  active: boolean
+  reason: 'noSource' | 'previews' | null
+  language: string | null
+}
+
+export function useSeriesLanguageFallback(seriesId: number) {
+  return useQuery({
+    queryKey: ['series', seriesId, 'language-fallback'],
+    queryFn: () => api<SeriesLanguageFallback>(`/series/${seriesId}/language-fallback`),
+  })
+}
+
+export function useRevertLanguageFallback(seriesId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      api<SeriesLanguageFallback>(`/series/${seriesId}/language-fallback/revert`, { method: 'POST' }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['series', seriesId] })
+      void queryClient.invalidateQueries({ queryKey: ['sourcemappings'] })
+      void queryClient.invalidateQueries({ queryKey: ['series'] })
+    },
+  })
+}
+
 export function useRefreshMetadataDump() {
   return useMutation({
     mutationFn: () =>

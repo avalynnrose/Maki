@@ -4894,11 +4894,6 @@ msgid "Chapters downloaded automatically"
 msgstr "章节已自动下载"
 
 #: src/pages/SeriesDetailPage.tsx
-#, fuzzy
-#~ msgid "Chapters known"
-#~ msgstr "已知章节"
-
-#: src/pages/SeriesDetailPage.tsx
 msgid "Chapters listed by sources"
 msgstr ""
 
@@ -6038,6 +6033,10 @@ msgstr "从“管理标签”创建新标签。"
 #, fuzzy
 msgid "Create the administrator account. Your library and reading history, if you have any, are already attached to it."
 msgstr "创建管理员账户。你的资料库和阅读历史（如果有）已经与该账户关联。"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Create the folder and mount it into the container first."
+msgstr ""
 
 #: src/pages/SetupAccountPage.tsx
 #, fuzzy
@@ -7638,6 +7637,20 @@ msgstr "更新标签失败：{detail}"
 #, fuzzy
 msgid "Fair quality"
 msgstr "质量一般"
+
+#: src/pages/settings/DownloadCards.tsx
+#: src/pages/settings/registry.ts
+msgid "Fallback language"
+msgstr ""
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Fallback language: {language}"
+msgstr ""
+
+#. Search terms for the settings command palette, not prose. Translate each term as the word someone would actually type in this language, keep them comma-separated, and add or drop terms freely: the list does not have to match English item for item.
+#: src/pages/settings/registry.ts
+msgid "fallback, fallback language, english fallback, no source, previews, second language, other language"
+msgstr ""
 
 #: src/pages/discover/TasteTab.tsx
 #, fuzzy
@@ -10512,6 +10525,10 @@ msgstr "Maki 无法连接服务器。服务器恢复后，首页会立即恢复�
 msgid "Maki can't reach this folder"
 msgstr "Maki 无法访问此文件夹"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "Maki cannot reach the saved root folder, so the fallback is not running. Check that it is mounted."
+msgstr ""
+
 #: src/components/RelinkFilesModal.tsx
 #, fuzzy
 msgid "Maki checked the folder against the chapter list. Tick what to trust and watch the map. Nothing changes until you press Relink."
@@ -12085,6 +12102,10 @@ msgstr "没有结果。"
 msgid "No reviews on MyAnimeList yet."
 msgstr "MyAnimeList 上暂无评论。"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "No root folder is set, so the fallback is not running."
+msgstr ""
+
 #: src/pages/ImportPage.tsx
 #, fuzzy
 msgid "No root folders yet"
@@ -12130,6 +12151,10 @@ msgstr "还没有来源列出此系列的章节，因此没有总数可供对照
 #, fuzzy
 msgid "No source has this chapter right now"
 msgstr "目前没有来源提供此章节"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "No source has this series in your main language, so it uses the fallback language."
+msgstr ""
 
 #: src/pages/LibraryPage.tsx
 #, fuzzy
@@ -13735,6 +13760,7 @@ msgstr "手机阅读器"
 msgid "Pick a chapter language first"
 msgstr "请先选择章节语言"
 
+#: src/pages/settings/DownloadCards.tsx
 #: src/pages/settings/ManageSourcesModal.tsx
 #, fuzzy
 msgid "Pick a language"
@@ -13742,6 +13768,7 @@ msgstr "选择语言"
 
 #: src/pages/LibraryPage.tsx
 #: src/pages/SeriesDetailPage.tsx
+#: src/pages/settings/DownloadCards.tsx
 #, fuzzy
 msgid "Pick a root folder"
 msgstr "选择根文件夹"
@@ -13765,6 +13792,10 @@ msgstr "请选择未来的时间"
 #, fuzzy
 msgid "Pick another default profile first"
 msgstr "请先选择另一个默认配置"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Pick both a language and a root folder."
+msgstr ""
 
 #: src/pages/settings/ManageSourcesModal.tsx
 #, fuzzy
@@ -15933,6 +15964,10 @@ msgstr "罗马字"
 #, fuzzy
 msgid "Root folder"
 msgstr "根文件夹"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Root folder for fallback series"
+msgstr ""
 
 #: src/components/settings/UsersSection.tsx
 #: src/pages/settings/LibraryCards.tsx
@@ -18173,6 +18208,10 @@ msgstr "suwayomi, tachidesk, mihon, tachiyomi, 扩展, 扩展来源, 更多来�
 msgid "Switch reading direction"
 msgstr "切换阅读方向"
 
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Switched back to your main language"
+msgstr ""
+
 #: src/components/RecommendationModelSwitch.tsx
 #, fuzzy
 msgid "Switching model… downloading the model and its index."
@@ -18762,6 +18801,10 @@ msgstr "样本下载失败"
 msgid "The saved chapters wouldn't open"
 msgstr "已保存的章节无法打开"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "The saved root folder no longer exists, so the fallback is not running."
+msgstr ""
+
 #: src/components/import/IgnoredFoldersModal.tsx
 #, fuzzy
 msgid "The scan skips these folders without searching for them."
@@ -18857,6 +18900,10 @@ msgstr "来源没有返回页面"
 #, fuzzy
 msgid "The source you picked could not provide this chapter"
 msgstr "你选择的来源无法提供此章节"
+
+#: src/components/LanguageFallbackNotice.tsx
+msgid "The sources in your main language only serve previews, so this series uses the fallback language."
+msgstr ""
 
 #: src/pages/discover/TasteTab.tsx
 #, fuzzy
@@ -19643,6 +19690,10 @@ msgstr "重试"
 msgid "Try clearing the filters."
 msgstr "尝试清除筛选条件。"
 
+#: src/components/LanguageFallbackNotice.tsx
+msgid "Try the main language again"
+msgstr ""
+
 #: src/components/discover/PreviewChapterButton.tsx
 #, fuzzy
 msgid "Try the preview again"
@@ -20234,6 +20285,10 @@ msgstr "URL"
 #, fuzzy
 msgid "Use"
 msgstr "使用"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "Use a fallback language"
+msgstr ""
 
 #: src/pages/LoginPage.tsx
 #, fuzzy
@@ -20852,6 +20907,10 @@ msgstr "服务器上的新内容可以稍后再处理。这些章节已保存在
 #, fuzzy
 msgid "When"
 msgstr "时间"
+
+#: src/pages/settings/DownloadCards.tsx
+msgid "When a new series has no source in your languages, or every source only serves previews, Maki can use another language for that series instead. It only happens while the series has no files, it goes into its own root folder, and you can switch it back from the series page. Series that have a usable source never use the fallback."
+msgstr ""
 
 #: src/pages/settings/DownloadCards.tsx
 #, fuzzy
