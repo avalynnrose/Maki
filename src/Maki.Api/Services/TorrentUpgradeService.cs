@@ -124,7 +124,8 @@ public class TorrentUpgradeService(
     IAppSettings settings,
     TimeProvider time,
     MangaBakaLocalStore store,
-    ILogger<TorrentUpgradeService> logger)
+    ILogger<TorrentUpgradeService> logger,
+    Maki.Core.Sources.SourceRegistry? sources = null)
 {
     public static readonly TimeSpan SearchInterval = TimeSpan.FromDays(7);
 
@@ -841,7 +842,51 @@ public class TorrentUpgradeService(
             }
         }
 
+        // Chapter rows from a scraping source carry no volume. MangaDex lists which chapters sit in which
+        // volume, so a series with a MangaDex id can still say what a volume release covers.
+        if (series.MangaDexUuid is { Length: > 0 } uuid && chapters.Any(c => c.Volume is null && c.Number is not null)
+            && await MangaDexVolumesAsync(uuid, ct) is { Count: > 0 } byNumber)
+        {
+            foreach (var chapter in chapters.Where(c => c.Volume is null && c.Number is not null))
+            {
+                if (!inferred.ContainsKey(chapter.Id) && byNumber.TryGetValue(chapter.Number!.Value, out var volume))
+                {
+                    inferred[chapter.Id] = volume;
+                }
+            }
+        }
+
         return new LibraryState(language, chapters, inferred);
+    }
+
+    private static readonly TimeSpan VolumeMapLifetime = TimeSpan.FromHours(12);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, IReadOnlyDictionary<decimal, int> Map)> VolumeMaps = new();
+
+    /// <summary>Chapter number to volume from MangaDex, kept for a while; empty when it cannot be had.</summary>
+    private async Task<IReadOnlyDictionary<decimal, int>> MangaDexVolumesAsync(string uuid, CancellationToken ct)
+    {
+        if (VolumeMaps.TryGetValue(uuid, out var cached) && DateTime.UtcNow - cached.At < VolumeMapLifetime)
+        {
+            return cached.Map;
+        }
+
+        if (sources?.Find("mangadex") is not Maki.Core.Sources.IChapterVolumeSource source)
+        {
+            return new Dictionary<decimal, int>();
+        }
+
+        try
+        {
+            var map = await source.GetChapterVolumesAsync(uuid, ct);
+            VolumeMaps[uuid] = (DateTime.UtcNow, map);
+            return map;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException
+                                       && !ct.IsCancellationRequested)
+        {
+            logger.LogDebug(ex, "Could not read the MangaDex volume map of {Id}", uuid);
+            return new Dictionary<decimal, int>();
+        }
     }
 
     private sealed class LibraryState(string? language, List<Chapter> chapters, Dictionary<int, int> inferred)
