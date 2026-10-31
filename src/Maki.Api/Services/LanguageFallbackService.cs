@@ -110,7 +110,7 @@ public class LanguageFallbackService(
     /// Sources that were not measured twice are not judged, so a source that merely failed to answer
     /// keeps the primary language.
     /// </summary>
-    public async Task<LanguageFallbackResult> EvaluateAfterScoutAsync(int seriesId, CancellationToken ct)
+    public virtual async Task<LanguageFallbackResult> EvaluateAfterScoutAsync(int seriesId, CancellationToken ct)
     {
         if (await LoadConfigAsync(ct) is null)
         {

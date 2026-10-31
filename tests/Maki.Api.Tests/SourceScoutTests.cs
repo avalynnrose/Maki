@@ -2,6 +2,7 @@ using Maki.Api.Services;
 using Maki.Core.Configuration;
 using Maki.Core.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Maki.Api.Tests;
@@ -21,6 +22,42 @@ public class SourceScoutTests : IDisposable
     {
         using var db = _world.Db.NewContext();
         return db.SourceQualitySamples.AsNoTracking().ToList();
+    }
+
+    /// <summary>Records that the scout asked for the language fallback to be considered.</summary>
+    private sealed class SpyFallback() : LanguageFallbackService(
+        new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
+        new FakeAppSettings(), Sources.AllEnabled, new Maki.Core.Sources.SourceRegistry([]), new RecordingInbox(),
+        NullLogger<LanguageFallbackService>.Instance)
+    {
+        public TaskCompletionSource<int> Asked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override Task<LanguageFallbackResult> EvaluateAfterScoutAsync(int seriesId, CancellationToken ct)
+        {
+            Asked.TrySetResult(seriesId);
+            return Task.FromResult(LanguageFallbackResult.Skip("spy"));
+        }
+    }
+
+    [Fact]
+    public async Task A_finished_run_asks_the_language_fallback_to_look_at_the_series()
+    {
+        _world.Seed();
+        _world.AggPages = UpgradeWorld.InlinePages(5, 700);
+        _world.OfficialPages = UpgradeWorld.InlinePages(5, 1600);
+        _world.Chapter(1, withFile: false);
+        var spy = new SpyFallback();
+        var services = new ServiceCollection();
+        services.AddScoped(_ => _world.Db.NewContext());
+        services.AddSingleton<LanguageFallbackService>(spy);
+        var scout = new SourceScoutService(
+            services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), _world.Registry,
+            _world.Availability, _world.Probes(), _world.Queue, NullLogger<SourceScoutService>.Instance);
+
+        scout.Start(_world.SeriesId);
+
+        Assert.Equal(_world.SeriesId, await spy.Asked.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.False(scout.Snapshot(_world.SeriesId)!.Running);
     }
 
     [Fact]
