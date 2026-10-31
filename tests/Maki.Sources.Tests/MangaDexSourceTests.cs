@@ -94,9 +94,27 @@ public class MangaDexSourceTests
         var volumes = await new MangaDexSource(factory).GetChapterVolumesAsync("a1c7c817");
 
         Assert.Equal(1, volumes[2m]);
-        var feed = Assert.Single(factory.Requests);
-        Assert.Contains("includeUnavailable=1", feed);
-        Assert.Contains("translatedLanguage[]=en", feed);
+        Assert.Equal(2, factory.Requests.Count);
+        Assert.Contains("includeUnavailable=1", factory.Requests[0]);
+        Assert.Contains("translatedLanguage[]=en", factory.Requests[0]);
+        Assert.DoesNotContain("translatedLanguage", factory.Requests[1]);
+    }
+
+    [Fact]
+    public async Task GetChapterVolumes_fills_the_numbers_english_leaves_out_from_every_language()
+    {
+        // English knows chapter 7 only; the all-language feed also assigns chapter 9, and disagrees
+        // with English about chapter 7, where English wins.
+        var factory = new FakeHttpClientFactory(new()
+        {
+            ["translatedLanguage[]=en"] = FeedPage(total: 1, volume: "1"),
+            ["feed"] = FeedPage(total: 1, volume: "2").Replace("\"chapter\":\"7\"", "\"chapter\":\"9\"")
+        });
+
+        var volumes = await new MangaDexSource(factory).GetChapterVolumesAsync("a1c7c817");
+
+        Assert.Equal(1, volumes[7m]);
+        Assert.Equal(2, volumes[9m]);
     }
 
     [Fact]
@@ -128,7 +146,8 @@ public class MangaDexSourceTests
         var volumes = await new MangaDexSource(factory).GetChapterVolumesAsync("a1c7c817");
 
         Assert.Equal(3, volumes[7m]);
-        Assert.Equal(20, factory.Requests.Count);
+        // The English walk and the all-language walk each stop at the cap.
+        Assert.Equal(40, factory.Requests.Count);
         Assert.DoesNotContain(factory.Requests, r => r.Contains("offset=10000", StringComparison.Ordinal));
     }
 
