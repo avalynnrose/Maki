@@ -101,6 +101,27 @@ public class LanguageFallbackService(
         }
     }
 
+    /// <summary>
+    /// <see cref="GetRecordAsync"/>, but only while the series still sits in the fallback root folder.
+    /// A series somebody moved elsewhere by hand is no longer in fallback, whatever it remembers.
+    /// </summary>
+    public async Task<LanguageFallbackRecord?> GetActiveRecordAsync(int seriesId, CancellationToken ct)
+    {
+        var record = await GetRecordAsync(seriesId, ct);
+        if (record is null ||
+            !int.TryParse(await settings.GetAsync(SettingKeys.SourceFallbackRootFolderId, ct), out var fallbackRootId))
+        {
+            return null;
+        }
+
+        using var scope = scopes.CreateScope();
+        var rootFolderId = await scope.ServiceProvider.GetRequiredService<MakiDbContext>().Series.AsNoTracking()
+            .Where(s => s.Id == seriesId)
+            .Select(s => (int?)s.RootFolderId)
+            .FirstOrDefaultAsync(ct);
+        return rootFolderId == fallbackRootId ? record : null;
+    }
+
     /// <summary>Rule A: the primary language has no source for a freshly added series.</summary>
     public Task<LanguageFallbackResult> FallBackAsync(int seriesId, LanguageFallbackReason reason, CancellationToken ct) =>
         SwapAsync(seriesId, reason, ct);
@@ -147,7 +168,7 @@ public class LanguageFallbackService(
     /// <summary>"Try the primary language again": undoes a fallback while the series still has no files.</summary>
     public async Task<LanguageFallbackResult> RevertAsync(int seriesId, CancellationToken ct)
     {
-        var record = await GetRecordAsync(seriesId, ct);
+        var record = await GetActiveRecordAsync(seriesId, ct);
         if (record is null)
         {
             return LanguageFallbackResult.Skip("notInFallback");

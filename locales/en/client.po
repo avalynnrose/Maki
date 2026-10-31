@@ -15207,6 +15207,10 @@ msgstr "The odd one out"
 msgid "The old file could not be moved aside for the upgrade"
 msgstr "The old file could not be moved aside for the upgrade"
 
+#: src/pages/settings/DownloadCards.tsx
+msgid "The preview check uses the source measurement, so it only runs while \"Measure sources when a series is added\" is on. A series with no source in your languages falls back either way."
+msgstr "The preview check uses the source measurement, so it only runs while \"Measure sources when a series is added\" is on. A series with no source in your languages falls back either way."
+
 #: src/components/discover/PreviewChapterButton.tsx
 msgid "The preview expired. Try again."
 msgstr "The preview expired. Try again."

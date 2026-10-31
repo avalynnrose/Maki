@@ -211,6 +211,13 @@ export function LanguageFallbackSection() {
               onChange={setRootFolderId}
               allowDeselect={false}
             />
+            <Text size="xs" c="var(--ink-3)">
+              <Trans>
+                The preview check uses the source measurement, so it only runs while "Measure sources
+                when a series is added" is on. A series with no source in your languages falls back
+                either way.
+              </Trans>
+            </Text>
             {incomplete && (
               <Text size="sm" c="var(--danger)">
                 <Trans>Pick both a language and a root folder.</Trans>

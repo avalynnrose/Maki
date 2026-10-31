@@ -110,7 +110,7 @@ public class LanguageFallbackController(
             return NotFound();
         }
 
-        var record = await fallback.GetRecordAsync(id, ct);
+        var record = await fallback.GetActiveRecordAsync(id, ct);
         return Ok(record is null
             ? new SeriesFallback(false, null, null)
             : new SeriesFallback(true, record.Reason, record.Language));

@@ -361,7 +361,7 @@ public class LanguageFallbackServiceTests : IDisposable
         var (mappings, series, _) = State(seriesId);
         Assert.Equal(("raw", "ja"), (Assert.Single(mappings).SourceName, mappings[0].LanguageFilter));
         Assert.Equal(originalRoot, series.RootFolderId);
-        Assert.Null(await service.GetRecordAsync(seriesId, default));
+        Assert.Null(await service.GetActiveRecordAsync(seriesId, default));
 
         Probe(seriesId, "raw", 4, 5);
         var again = await service.EvaluateAfterScoutAsync(seriesId, default);
@@ -382,7 +382,27 @@ public class LanguageFallbackServiceTests : IDisposable
         Assert.Equal(LanguageFallbackOutcome.NoSource, reverted.Outcome);
         Assert.Equal(_fallbackRootId, State(seriesId).Series.RootFolderId);
         Assert.Equal("mangaplus", Assert.Single(State(seriesId).Mappings).SourceName);
-        Assert.NotNull(await service.GetRecordAsync(seriesId, default));
+        Assert.NotNull(await service.GetActiveRecordAsync(seriesId, default));
+    }
+
+    [Fact]
+    public async Task A_series_moved_out_of_the_fallback_folder_by_hand_is_no_longer_in_fallback()
+    {
+        EnableFallback();
+        var seriesId = _db.SeedSeries("Hajime no Ippo");
+        var originalRoot = State(seriesId).Series.RootFolderId;
+        var service = Service(English("mangaplus"));
+        await service.FallBackAsync(seriesId, LanguageFallbackReason.NoSource, default);
+        Assert.NotNull(await service.GetActiveRecordAsync(seriesId, default));
+
+        using (var db = _db.NewContext())
+        {
+            db.Series.Single(s => s.Id == seriesId).RootFolderId = originalRoot;
+            db.SaveChanges();
+        }
+
+        Assert.Null(await service.GetActiveRecordAsync(seriesId, default));
+        Assert.Equal("notInFallback", (await service.RevertAsync(seriesId, default)).Why);
     }
 
     [Fact]
