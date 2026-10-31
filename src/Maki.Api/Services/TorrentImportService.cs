@@ -903,7 +903,7 @@ public class TorrentImportService(
     {
         try
         {
-            if (source.Entry is null && source.Kind is ComicSourceKind.Cbz or ComicSourceKind.Zip)
+            if (source.Entry is null && source.Slice is null && source.Kind is ComicSourceKind.Cbz or ComicSourceKind.Zip)
             {
                 return ChapterFileMeasurer.MeasureArchive(source.Path, GuardSamplePages, ct);
             }

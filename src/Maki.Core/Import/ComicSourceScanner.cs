@@ -153,7 +153,8 @@ public static class ComicSourceScanner
                     ? ComicSourceKind.Cbz
                     : ComicSourceKind.Zip;
 
-            return [new ComicSource(CbzName(path), kind, path, new FileInfo(path).Length, pages)];
+            return VolumePackSplitter.Split(
+                new ComicSource(CbzName(path), kind, path, new FileInfo(path).Length, pages));
         }
 
         // No pages of its own: an archive of archives, one per chapter. Each inner one is its own
