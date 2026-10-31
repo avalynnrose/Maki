@@ -103,6 +103,13 @@ public sealed class SourceScoutService(
             .AnyAsync(c => c.Key == SettingKeys.SourcesScoutOnMatch && c.Value == "true", ct);
         if (enabled)
         {
+            // Released when the run ends, after the fallback has looked at the series.
+            if (await db.AppConfig.AsNoTracking().AnyAsync(
+                    c => c.Key == SettingKeys.SourceFallbackLanguage && c.Value != "", ct))
+            {
+                LanguageFallbackHold.Hold(seriesId);
+            }
+
             Start(seriesId);
         }
     }
@@ -151,9 +158,16 @@ public sealed class SourceScoutService(
             job.Running = false;
         }
 
-        if (completed)
+        try
         {
-            await ConsiderFallbackAsync(seriesId);
+            if (completed)
+            {
+                await ConsiderFallbackAsync(seriesId);
+            }
+        }
+        finally
+        {
+            LanguageFallbackHold.Release(seriesId);
         }
     }
 

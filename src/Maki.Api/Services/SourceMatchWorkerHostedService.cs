@@ -216,10 +216,11 @@ public class SourceMatchWorkerHostedService(
             var matcher = scope.ServiceProvider.GetRequiredService<SourceMatchService>();
             mapped = await matcher.AutoMatchAsync(series, ct, progress);
 
-            // Only when every source answered: an outage makes every search fail, and that says
-            // nothing about whether the primary language has the series.
+            // Only when every source answered, or the ones that did not are down for good and another
+            // one answered: a short outage fails every search and says nothing about the series.
             var fellBack = false;
-            if (mapped.Count == 0 && !progress.Failed.Any() &&
+            if (mapped.Count == 0 &&
+                failureStreaks.AllowsManualMatchAlert(progress.Answered, [.. progress.Failed]) &&
                 scope.ServiceProvider.GetService<LanguageFallbackService>() is { } fallbackService)
             {
                 var fallback = await fallbackService.FallBackAsync(series.Id, LanguageFallbackReason.NoSource, ct);

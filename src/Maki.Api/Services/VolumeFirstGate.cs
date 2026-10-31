@@ -24,6 +24,11 @@ public static class VolumeFirstGate
     public static async Task<bool> HoldsAsync(
         MakiDbContext db, IAppSettings settings, DateTime nowUtc, int seriesId, CancellationToken ct)
     {
+        if (LanguageFallbackHold.Holds(seriesId, nowUtc))
+        {
+            return true;
+        }
+
         if (await settings.GetAsync(SettingKeys.DownloadsVolumeFirst, ct) != "true")
         {
             return false;
