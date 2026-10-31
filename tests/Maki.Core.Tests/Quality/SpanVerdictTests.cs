@@ -351,4 +351,18 @@ public class SpanVerdictTests
     {
         Assert.Equal(SpanOutcome.Ignore, Evaluate([Met(20, 3, 120)], missingOnlyOk: true).Outcome);
     }
+
+    [Fact]
+    public void Volumes_that_cannot_be_mapped_to_chapters_wait_for_a_click_where_adding_is_welcome()
+    {
+        var span = new ReleaseSpan(new NumberRange(1, 8), []);
+
+        var ignored = Evaluate([], span, mappingKnown: false);
+        Assert.Equal(SpanOutcome.Ignore, ignored.Outcome);
+        Assert.Equal([SpanVerdictReasons.NothingToUpgrade], ignored.Reasons);
+
+        var verdict = Evaluate([], span, mappingKnown: false, missingOnlyOk: true);
+        Assert.Equal(SpanOutcome.Proposal, verdict.Outcome);
+        Assert.Equal([SpanVerdictReasons.VolumeSpanUnknown], verdict.Reasons);
+    }
 }
