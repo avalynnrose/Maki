@@ -40,7 +40,7 @@ public class ReleaseController(
         {
             var result = await releaseService.SearchAsync(seriesId, query, ct);
             searches.Remember(seriesId, result.Backend, result.Releases);
-            var views = await torrents.EvaluateAsync(seriesId, result.Releases, ct);
+            var views = await torrents.EvaluateAsync(seriesId, result.Releases, ct, addsChaptersOk: true);
             var byGuid = views
                 .Where(v => !v.Verdict.Reasons.Contains(SpanVerdictReasons.NoProfile))
                 .GroupBy(v => v.Release.Guid)

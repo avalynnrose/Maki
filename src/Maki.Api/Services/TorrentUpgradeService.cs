@@ -135,7 +135,7 @@ public class TorrentUpgradeService(
     private List<(int SeriesId, IReadOnlyList<string> Titles)>? _libraryTitles;
 
     public async Task<IReadOnlyList<TorrentCandidateView>> EvaluateAsync(
-        int seriesId, IReadOnlyList<ReleaseDto> found, CancellationToken ct)
+        int seriesId, IReadOnlyList<ReleaseDto> found, CancellationToken ct, bool addsChaptersOk = false)
     {
         var series = await db.Series.AsNoTracking().Include(s => s.RootFolder).FirstOrDefaultAsync(s => s.Id == seriesId, ct);
         if (series is null || found.Count == 0)
@@ -179,7 +179,7 @@ public class TorrentUpgradeService(
                 ? (library.All(evaluator, score), true)
                 : library.Covered(parsed.Span, evaluator, score);
             var verdict = SpanVerdicts.Evaluate(new SpanVerdictInput(parsed.Span, matched, mappingKnown, chapters,
-                release.Size, options.TorrentAutoGrabMaxBytes, options.VolumeMissingTolerance, wholeSeries, volumeFirst));
+                release.Size, options.TorrentAutoGrabMaxBytes, options.VolumeMissingTolerance, wholeSeries, volumeFirst || addsChaptersOk));
             if (trailing)
             {
                 verdict = verdict.AtMostProposal(SpanVerdictReasons.TrailingNumber);
@@ -386,7 +386,7 @@ public class TorrentUpgradeService(
             }
 
             var blocked = await BlockedGuidsAsync(seriesId, ct);
-            var views = (await EvaluateAsync(seriesId, result.Releases, ct))
+            var views = (await EvaluateAsync(seriesId, result.Releases, ct, addsChaptersOk: ignoreGlobalSwitch))
                 .Where(v => !blocked.Contains(v.Release.Guid))
                 .Select(v => switchesOff ? v with { Verdict = v.Verdict.AtMostProposal(SpanVerdictReasons.UpgradesDisabled) } : v)
                 .OrderByDescending(v => v.Score)
@@ -474,7 +474,7 @@ public class TorrentUpgradeService(
 
         var release = JsonSerializer.Deserialize<ReleaseDto>(row.ReleaseInfoJson, QualitySnapshot.Json)!;
         var evaluator = await evaluation.ForSeriesAsync(row.SeriesId, ct);
-        var view = (await EvaluateAsync(row.SeriesId, [release], ct)).FirstOrDefault();
+        var view = (await EvaluateAsync(row.SeriesId, [release], ct, addsChaptersOk: true)).FirstOrDefault();
         var info = evaluator is not null && view is not null
             ? InfoFor(evaluator, view, row.Id)
             : new TorrentUpgradeInfo { ProposalId = row.Id, Reasons = [SpanVerdictReasons.NoProfile] };
