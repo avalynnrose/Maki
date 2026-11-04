@@ -41,4 +41,27 @@ public class LanguageFallbackRuleTests
     [InlineData(new[] { 1, 2, 3 }, true)]
     public void The_median_page_count_is_compared_with_the_preview_threshold(int[] pages, bool previews) =>
         Assert.Equal(previews, LanguageFallbackRule.ServesPreviewsOnly(pages));
+
+    [Fact]
+    public void A_source_that_publishes_no_chapters_is_not_judged()
+    {
+        // One source lists chapters and serves previews; eleven list nothing and have no samples.
+        var silent = Enumerable.Range(2, 11).Select(id => new LanguageFallbackRule.MappingSamples(id, [], false));
+        Assert.Equal(
+            LanguageFallbackReason.PreviewsOnly,
+            LanguageFallbackRule.Evaluate([Mapping(1, 11, 7, 7), .. silent]));
+    }
+
+    [Fact]
+    public void A_publishing_source_that_was_not_measured_still_keeps_the_primary_language()
+    {
+        var silent = new LanguageFallbackRule.MappingSamples(3, [], false);
+        Assert.Null(LanguageFallbackRule.Evaluate([Mapping(1, 11, 7, 7), Mapping(2), silent]));
+    }
+
+    [Fact]
+    public void Sources_that_all_publish_nothing_are_no_evidence_of_previews()
+    {
+        Assert.Null(LanguageFallbackRule.Evaluate([new(1, [], false), new(2, [], false)]));
+    }
 }

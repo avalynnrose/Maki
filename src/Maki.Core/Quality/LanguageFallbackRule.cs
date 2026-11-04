@@ -18,7 +18,12 @@ public static class LanguageFallbackRule
     /// <summary>A source needs this many measured chapters before it can be called unusable, so one that merely failed to answer never counts.</summary>
     public const int MinMeasuredSamples = 2;
 
-    public readonly record struct MappingSamples(int MappingId, IReadOnlyList<int> PageCounts);
+    /// <param name="PublishesChapters">
+    /// Whether the source lists any chapter of the series. One that lists none has nothing to
+    /// measure and says nothing about previews, so it is not judged.
+    /// </param>
+    public readonly record struct MappingSamples(
+        int MappingId, IReadOnlyList<int> PageCounts, bool PublishesChapters = true);
 
     /// <summary>
     /// True when at least <see cref="MinMeasuredSamples"/> chapters were measured and the median is
@@ -41,7 +46,9 @@ public static class LanguageFallbackRule
 
     /// <summary>
     /// The reason to fall back, or null to keep the primary language. One usable or unmeasured
-    /// source is enough to keep it: ranking among sources is the source order's job.
+    /// source that publishes chapters is enough to keep it: ranking among sources is the source
+    /// order's job. Sources that publish none are left out; if no source publishes any, there is
+    /// no evidence of previews either.
     /// </summary>
     public static LanguageFallbackReason? Evaluate(IReadOnlyCollection<MappingSamples> primaryMappings)
     {
@@ -50,7 +57,8 @@ public static class LanguageFallbackRule
             return LanguageFallbackReason.NoSource;
         }
 
-        return primaryMappings.All(m => ServesPreviewsOnly(m.PageCounts))
+        var publishing = primaryMappings.Where(m => m.PublishesChapters).ToList();
+        return publishing.Count > 0 && publishing.All(m => ServesPreviewsOnly(m.PageCounts))
             ? LanguageFallbackReason.PreviewsOnly
             : null;
     }

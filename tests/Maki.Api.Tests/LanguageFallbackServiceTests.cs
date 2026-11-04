@@ -151,6 +151,15 @@ public class LanguageFallbackServiceTests : IDisposable
         var chapters = db.Chapters.Where(c => c.SeriesId == seriesId).OrderBy(c => c.Number).Select(c => c.Id).ToList();
         for (var i = 0; i < pages.Length; i++)
         {
+            // A scout only samples chapters the source lists, so the source publishes what it was measured on.
+            if (!db.ChapterSourceLinks.Any(l => l.ChapterId == chapters[i] && l.SourceMappingId == mappingId))
+            {
+                db.ChapterSourceLinks.Add(new ChapterSourceLink
+                {
+                    ChapterId = chapters[i], SourceMappingId = mappingId, SourceChapterId = $"p{chapters[i]}"
+                });
+            }
+
             db.SourceQualitySamples.Add(new SourceQualitySample
             {
                 SourceMappingId = mappingId,

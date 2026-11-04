@@ -158,8 +158,16 @@ public class LanguageFallbackService(
                 .ToListAsync(ct))
             .ToLookup(s => s.SourceMappingId, s => s.PageCount);
 
+        var publishing = (await db.ChapterSourceLinks.AsNoTracking()
+                .Where(l => ids.Contains(l.SourceMappingId))
+                .Select(l => l.SourceMappingId)
+                .Distinct()
+                .ToListAsync(ct))
+            .ToHashSet();
+
         var reason = LanguageFallbackRule.Evaluate(
-            [.. mappings.Select(m => new LanguageFallbackRule.MappingSamples(m.Id, [.. samples[m.Id]]))]);
+            [.. mappings.Select(m => new LanguageFallbackRule.MappingSamples(
+                m.Id, [.. samples[m.Id]], publishing.Contains(m.Id)))]);
         return reason is null
             ? LanguageFallbackResult.Skip("usableSource")
             : await SwapAsync(seriesId, reason.Value, ct);
