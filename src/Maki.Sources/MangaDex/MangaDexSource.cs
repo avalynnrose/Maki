@@ -147,8 +147,23 @@ public class MangaDexSource(IHttpClientFactory httpClientFactory) : ISource, ICh
     public async Task<IReadOnlyDictionary<decimal, int>> GetChapterVolumesAsync(
         string sourceSeriesId, CancellationToken ct = default)
     {
+        // English wins where it has an answer. Its feed often covers only the first chapters of a
+        // series (only chapters 1 to 3 of a title had an English volume while every translation
+        // together assigned 55), so the all-language feed fills the numbers English leaves out.
         var english = await WalkVolumesAsync(sourceSeriesId, "&translatedLanguage[]=en", ct);
-        return english.Count > 0 ? english : await WalkVolumesAsync(sourceSeriesId, string.Empty, ct);
+        var every = await WalkVolumesAsync(sourceSeriesId, string.Empty, ct);
+        if (english.Count == 0)
+        {
+            return every;
+        }
+
+        var merged = new Dictionary<decimal, int>(english);
+        foreach (var (number, volume) in every)
+        {
+            merged.TryAdd(number, volume);
+        }
+
+        return merged;
     }
 
     private async Task<IReadOnlyDictionary<decimal, int>> WalkVolumesAsync(
