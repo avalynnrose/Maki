@@ -286,6 +286,51 @@ public class LanguageFallbackServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task An_english_source_that_files_the_work_under_its_romanization_is_found_through_the_alt_title()
+    {
+        EnableFallback();
+        var seriesId = _db.SeedSeries("A Moment of Farewell", configure: s =>
+            s.AltTitles = [new LocalizedTitle("Sayonara no Moment", "ja-Latn"), new LocalizedTitle("さよならのモーメント", "ja")]);
+        var english = new FakeSource
+        {
+            Name = "mangadex",
+            SupportedLanguages = ["en"],
+            Capabilities = SourceCapabilities.SupportsLanguageFilter,
+            OnSearch = query => query == "Sayonara no Moment"
+                ? [new SourceSeriesResult("sm1", "Sayonara no Moment", "https://mangadex.test/sm1")]
+                : []
+        };
+
+        var result = await Service(Japanese("raw", matches: false), english)
+            .FallBackAsync(seriesId, LanguageFallbackReason.PreviewsOnly, default);
+
+        Assert.Equal(LanguageFallbackOutcome.Applied, result.Outcome);
+        Assert.Equal("mangadex", Assert.Single(State(seriesId).Mappings).SourceName);
+    }
+
+    [Fact]
+    public async Task Without_a_latin_alt_title_an_english_source_is_asked_only_for_the_main_title()
+    {
+        EnableFallback();
+        var seriesId = _db.SeedSeries("A Moment of Farewell", configure: s =>
+            s.AltTitles = [new LocalizedTitle("さよならのモーメント", "ja")]);
+        var queries = new List<string>();
+        var english = new FakeSource
+        {
+            Name = "mangadex",
+            SupportedLanguages = ["en"],
+            Capabilities = SourceCapabilities.SupportsLanguageFilter,
+            OnSearch = query => { queries.Add(query); return []; }
+        };
+
+        var result = await Service(Japanese("raw", matches: false), english)
+            .FallBackAsync(seriesId, LanguageFallbackReason.PreviewsOnly, default);
+
+        Assert.Equal(LanguageFallbackOutcome.NoSource, result.Outcome);
+        Assert.Equal(["A Moment of Farewell"], queries);
+    }
+
+    [Fact]
     public async Task It_does_nothing_while_the_feature_is_off_or_its_root_folder_is_unreachable()
     {
         var seriesId = _db.SeedSeries("Hajime no Ippo");

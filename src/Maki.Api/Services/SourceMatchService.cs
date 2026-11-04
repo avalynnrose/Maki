@@ -404,20 +404,21 @@ public partial class SourceMatchService(
         int priority,
         MatchTarget target,
         IProgress<SourceMatchStep>? progress,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool latinAltTitles = false)
     {
         var nothing = new SourceOutcome(source, priority, null, SourceMappingOrigin.TitleSearch, null);
         try
         {
             var results = await source.SearchAsync(target.Title, ct);
-            var outcome = await JudgeAsync(source, priority, target, results, ct);
+            var outcome = await JudgeAsync(source, priority, target, results, ct, latinAltTitles);
 
             // A source with no English in it often has no use for the English title. Its own
             // spelling of the work is only tried once that has found nothing, so a source the
             // English title already finds costs no extra request.
             if (outcome.Match is null)
             {
-                foreach (var term in NativeSearchTerms(source, target))
+                foreach (var term in NativeSearchTerms(source, target, latinAltTitles))
                 {
                     try
                     {
@@ -431,7 +432,7 @@ public partial class SourceMatchService(
                         continue;
                     }
 
-                    outcome = await JudgeAsync(source, priority, target, results, ct);
+                    outcome = await JudgeAsync(source, priority, target, results, ct, latinAltTitles);
                     if (outcome.Match is not null)
                     {
                         break;
@@ -453,7 +454,7 @@ public partial class SourceMatchService(
 
     private async Task<SourceOutcome> JudgeAsync(
         ISource source, int priority, MatchTarget target, IReadOnlyList<SourceSeriesResult> results,
-        CancellationToken ct)
+        CancellationToken ct, bool latinAltTitles = false)
     {
         var verdict = await CrossIdPassAsync(source, target, results, ct);
 
@@ -476,7 +477,7 @@ public partial class SourceMatchService(
             .Select(r => new ScrobbleCandidate(r.SourceSeriesId, r.Title, [], r.Url))
             .ToList();
         var best = ScrobbleMatching.BestCandidate(
-            [target.Title, .. NativeTitles(source, target)], candidates, MatchThreshold);
+            [target.Title, .. NativeTitles(source, target, latinAltTitles)], candidates, MatchThreshold);
         return best is null
             ? new SourceOutcome(source, priority, null, SourceMappingOrigin.TitleSearch, null)
             : new SourceOutcome(
@@ -488,9 +489,14 @@ public partial class SourceMatchService(
     /// The titles to score a result against besides the English one: the original title, and for a
     /// source that publishes no English, the alt title in the language it does publish.
     /// </summary>
-    private static List<string> NativeTitles(ISource source, MatchTarget target)
+    private static List<string> NativeTitles(ISource source, MatchTarget target, bool latinAltTitles = false)
     {
         var titles = new List<string>();
+        if (latinAltTitles && PublishesEnglish(source))
+        {
+            titles.AddRange(LatinAltTitles(target));
+        }
+
         if (target.OriginalTitle is not null)
         {
             titles.Add(target.OriginalTitle);
@@ -511,11 +517,21 @@ public partial class SourceMatchService(
     /// title in the source's own language, and the original title only where its script is one the
     /// source is written in, so a Spanish site is not asked for a Japanese title.
     /// </summary>
-    private static List<string> NativeSearchTerms(ISource source, MatchTarget target)
+    /// <param name="latinAltTitles">
+    /// Set while a language fallback looks for English sources: a source that publishes English is then
+    /// also asked for up to two of the series' Latin-script alternate titles (English or romanized),
+    /// because an English site often files a work under the romanization, not the main title.
+    /// </param>
+    internal static List<string> NativeSearchTerms(ISource source, MatchTarget target, bool latinAltTitles = false)
     {
         var terms = new List<string>();
         if (PublishesEnglish(source))
         {
+            if (latinAltTitles)
+            {
+                terms.AddRange(LatinAltTitles(target));
+            }
+
             return terms;
         }
 
@@ -532,6 +548,19 @@ public partial class SourceMatchService(
 
         return [.. terms.Where(t => !string.Equals(t, target.Title, StringComparison.OrdinalIgnoreCase))];
     }
+
+    /// <summary>Up to two Latin-script alternate titles (English or romanized) other than the main title.</summary>
+    private static IEnumerable<string> LatinAltTitles(MatchTarget target) =>
+        target.AltTitles
+            .Where(t => IsLatinScriptTitle(t) && !string.Equals(t.Title, target.Title, StringComparison.OrdinalIgnoreCase))
+            .Select(t => t.Title)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2);
+
+    /// <summary>An English title, or a romanization (MangaBaka tags those "ja-Latn", "ko-Latn" and so on).</summary>
+    private static bool IsLatinScriptTitle(LocalizedTitle title) =>
+        title.Language is { } language &&
+        (LocalizedTitle.Matches(language, "en") || language.EndsWith("-Latn", StringComparison.OrdinalIgnoreCase));
 
     private static bool ScriptFits(string title, ISource source)
     {
@@ -625,7 +654,8 @@ public partial class SourceMatchService(
             }
             else
             {
-                outcome = await WithGate(gate, () => SearchOneAsync(item.Source, item.Priority, target, progress, ct), ct);
+                outcome = await WithGate(
+                    gate, () => SearchOneAsync(item.Source, item.Priority, target, progress, ct, languageOverride is not null), ct);
             }
 
             settled?.Invoke(outcome, languages);
