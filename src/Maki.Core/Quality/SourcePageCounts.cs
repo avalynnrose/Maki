@@ -68,4 +68,12 @@ public static class SourcePageCounts
 
         return truncated;
     }
+
+    /// <summary>
+    /// A chapter this mapping is about to serve is a preview: the mapping already looks truncated on
+    /// this series and the chapter is no longer than a preview cap. Real chapters of a mapping that is
+    /// short only by habit (a series of short chapters) are longer than the cap or are not flagged.
+    /// </summary>
+    public static bool IsPreviewCopy(IReadOnlySet<int> truncated, int mappingId, int pageCount) =>
+        pageCount <= FixedMaxPages && truncated.Contains(mappingId);
 }

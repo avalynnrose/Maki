@@ -62,4 +62,12 @@ public class SourcePageCountsTests
     [Fact]
     public void A_source_with_nothing_to_compare_and_few_samples_is_left_alone() =>
         Assert.Empty(SourcePageCounts.Truncated([S(1, 1, 3), S(1, 2, 3)]));
+
+    [Theory]
+    [InlineData(1, 10, true)]
+    [InlineData(1, 15, true)]
+    [InlineData(1, 16, false)]
+    [InlineData(2, 10, false)]
+    public void A_short_chapter_from_a_truncated_mapping_is_a_preview_copy(int mapping, int pages, bool expected) =>
+        Assert.Equal(expected, SourcePageCounts.IsPreviewCopy(new HashSet<int> { 1 }, mapping, pages));
 }

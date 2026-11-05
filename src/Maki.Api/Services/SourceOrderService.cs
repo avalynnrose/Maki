@@ -89,10 +89,7 @@ public class SourceOrderService(SourceRegistry registry, ChapterFileQualityServi
         var ranked = SourceRanking.Order(evaluator.Profile,
             mappings.Select(m => new SourceRanking.Entry(m.Id, m.Priority, scores[m.Id])));
         var outcomes = await OutcomesAsync(db, mappings, ct);
-        var truncated = SourcePageCounts.Truncated(await db.SourceQualitySamples.AsNoTracking()
-            .Where(q => q.SeriesId == seriesId && q.PageCount > 0)
-            .Select(q => new SourcePageCounts.Sample(q.SourceMappingId, q.ChapterId, q.PageCount))
-            .ToListAsync(ct));
+        var truncated = await TruncatedMappingsAsync(db, seriesId, ct);
         var neverMeasured = mappings
             .Where(m => !estimates.ContainsKey(m.Id) && !library.ContainsKey(m.SourceName))
             .Select(m => m.Id)
@@ -104,6 +101,13 @@ public class SourceOrderService(SourceRegistry registry, ChapterFileQualityServi
             measuredFirst, m => SourceReliability.IsUnreliable(outcomes[m.Id]) || truncated.Contains(m.Id));
         return new SourceOrderResult(seriesMode, defaultMode, ordered, scores);
     }
+
+    /// <summary>The series' mappings whose measured page counts look like a preview (<see cref="SourcePageCounts"/>).</summary>
+    public static async Task<IReadOnlySet<int>> TruncatedMappingsAsync(MakiDbContext db, int seriesId, CancellationToken ct) =>
+        SourcePageCounts.Truncated(await db.SourceQualitySamples.AsNoTracking()
+            .Where(q => q.SeriesId == seriesId && q.PageCount > 0)
+            .Select(q => new SourcePageCounts.Sample(q.SourceMappingId, q.ChapterId, q.PageCount))
+            .ToListAsync(ct));
 
     /// <summary>
     /// How each mapping's downloads have gone: on this series if it has been tried here, otherwise

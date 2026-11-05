@@ -201,6 +201,25 @@ public class ChapterDownloadProcessor(
                 return DownloadOutcome.Settled;
             }
 
+            // A source whose earlier chapters on this series were all preview length is not downloaded from
+            // again for a chapter of that length: the next source is tried, and with none left the row fails
+            // rather than filing a preview as the chapter. A pick by hand, a repair or an upgrade stays as asked.
+            if (item.PreferredMappingId == null && item.HealthOperationId == null && item.UpgradeInfoJson == null &&
+                pageCount <= SourcePageCounts.FixedMaxPages &&
+                SourcePageCounts.IsPreviewCopy(await SourceOrderService.TruncatedMappingsAsync(db, chapter.SeriesId, ct), mapping.Id, pageCount))
+            {
+                logger.LogWarning("Queue item {Id}: {Source} serves {Pages} pages for this chapter and has only served previews on this series; not downloading it",
+                    item.Id, mapping.SourceName, pageCount);
+                if (await FailOverAsync(item, chapter, usedMapping, triedMappingIds, workingDir, ct) is not null)
+                {
+                    return await ProcessAsync(item.Id, triedMappingIds, ct);
+                }
+
+                await FailAsync(item, DownloadFailureReason.SourceError, ct, permanent: true,
+                    detail: $"The only source left serves previews ({pageCount} pages)");
+                return DownloadOutcome.Settled;
+            }
+
             item.PagesTotal = pageCount;
             await SetStatusAsync(item, QueueStatus.Downloading, ct);
 
