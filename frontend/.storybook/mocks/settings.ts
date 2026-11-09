@@ -176,6 +176,8 @@ export const settingsHandlers: HttpHandler[] = [
   putEcho('/settings/readcleanup'),
   http.get(api('/settings/sources/priority'), () => HttpResponse.json(d.sourcePriority)),
   putEcho('/settings/sources/priority'),
+  http.get(api('/settings/sources/fallback'), () => HttpResponse.json({ language: '', rootFolderId: null, problem: null })),
+  putEcho('/settings/sources/fallback'),
   http.get(api('/settings/sources/languages'), () => HttpResponse.json(d.sourceLanguages)),
   putEcho('/settings/sources/languages'),
   http.get(api('/search/sources'), () => HttpResponse.json(d.sources)),
