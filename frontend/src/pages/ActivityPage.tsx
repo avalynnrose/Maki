@@ -28,12 +28,12 @@ import {
   IconPackage,
   IconRefresh,
   IconSearch,
-  IconSparkles,
+  IconCircleArrowUp,
   IconTarget,
   IconX,
-} from '@tabler/icons-react'
+} from '../lib/icons'
 import { Link, useSearchParams } from 'react-router-dom'
-import { notifications } from '@mantine/notifications'
+import { notifications } from '../lib/toast'
 import { Plural, Trans, useLingui } from '@lingui/react/macro'
 import { plural, t as now } from '@lingui/core/macro'
 import type { MessageDescriptor } from '@lingui/core'
@@ -80,25 +80,27 @@ import { SeriesCell } from '../components/SeriesCell'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Panel } from '../components/ui/Panel'
 import { TableSkeleton } from '../components/ui/TableSkeleton'
-import { FigureStrip } from '../components/ui/FigureStrip'
+import { FigureStrip, FigureStripReveal } from '../components/ui/FigureStrip'
 import { StatusDot } from '../components/ui/StatusDot'
 import { isQueueActive, needsImportReview, queueStatusVisual, statusToken } from '../components/ui/status'
 import { isHeldByPause, queueErrorMessage, queueItemLabel, queueOriginOrUnknown } from '../api/queue'
 import { useLabel } from '../i18n-context'
 import { useSourceLabel } from '../sourceLabels'
-import { formatBytes, formatCalendarDate, formatDateTime, formatTime } from '../format'
+import { chapterLabel, formatBytes, formatCalendarDate, formatDateTime, formatTime } from '../format'
 import { SurfaceFrame } from '../components/ui/SurfaceFrame'
 import { UpcomingView } from '../components/releases/UpcomingView'
+import { MetaList } from '../components/ui/MetaList'
 
 const HISTORY_PAGE_SIZE = 25
 const UPGRADES_PAGE_SIZE = 25
 const UPGRADE_HISTORY_PAGE_SIZE = 25
 
-/** "Ch.148", "Ch.148 - Title", or the chapter's own title/"One-shot" when it has no number. */
+/** "Ch. 148", "Ch. 148: Title", or the chapter's own title/"One-shot" when it has no number. */
 function chapterRowLabel(row: { chapterNumber: number | null; chapterTitle: string | null }): string {
   const { chapterNumber, chapterTitle } = row
   if (chapterNumber === null) return chapterTitle ?? now`One-shot`
-  return chapterTitle ? now`Ch.${chapterNumber} - ${chapterTitle}` : now`Ch.${chapterNumber}`
+  const label = chapterLabel(chapterNumber)
+  return chapterTitle ? now`${label}: ${chapterTitle}` : label
 }
 
 /**
@@ -405,6 +407,7 @@ export default function ActivityPage() {
     }),
     [queueItems],
   )
+  const stripShown = stats.active + stats.queued + stats.review + stats.failed > 0
 
   return (
     <SurfaceFrame pageStyle="operational">
@@ -428,7 +431,7 @@ export default function ActivityPage() {
         onChange={changeTab}
         keepMounted={false}
       >
-        <Tabs.List mb="md">
+        <Tabs.List>
           <Tabs.Tab value="queue"><Trans>Queue</Trans></Tabs.Tab>
           <Tabs.Tab value="upgrades">
             <Trans>Upgrades</Trans>
@@ -443,15 +446,19 @@ export default function ActivityPage() {
 
         <Tabs.Panel value="queue">
       <QueuePauseBanner canManage={canManageQueue} />
-      <FigureStrip
-        loading={!queue && !queueQuery.isError}
-        figures={[
-          { label: t`In progress`, value: stats.active, tone: 'info' },
-          { label: t`Queued`, value: stats.queued },
-          { label: t`Needs review`, value: stats.review, tone: 'warn' },
-          { label: t`Failed`, value: stats.failed, tone: 'danger' },
-        ]}
-      />
+      {/* Mounted once the queue has loaded, so the first state shows without a transition. */}
+      {queue && (
+        <FigureStripReveal shown={stripShown}>
+          <FigureStrip
+            figures={[
+              { label: t`In progress`, value: stats.active, tone: 'info' },
+              { label: t`Queued`, value: stats.queued },
+              { label: t`Needs review`, value: stats.review, tone: 'warn' },
+              { label: t`Failed`, value: stats.failed, tone: 'danger' },
+            ]}
+          />
+        </FigureStripReveal>
+      )}
 
       {!queue ? (
         queueQuery.isError ? (
@@ -462,9 +469,12 @@ export default function ActivityPage() {
       ) : queueItems.length === 0 ? (
         <EmptyState
           compact
+          framed
           mood="asleep"
           title={t`Nothing in the queue`}
-          description={t`Queued and downloading chapters show up here. Trigger a search from a series page or the library.`}
+          description={t`Queued and downloading chapters show up here. Start a download from a series page or the library.`}
+          actionLabel={t`Open library`}
+          actionTo="/library"
         />
       ) : (
         <Panel p={0} className="table-panel">
@@ -497,7 +507,10 @@ export default function ActivityPage() {
                   const retryInfo =
                     q.status === 'Failed' && retryCount > 0
                       ? nextAttemptTime
-                        ? t`Retried ${retryCount}x - next attempt ${nextAttemptTime}`
+                        ? plural(retryCount, {
+                            one: `Retried # time. Next attempt at ${nextAttemptTime}.`,
+                            other: `Retried # times. Next attempt at ${nextAttemptTime}.`,
+                          })
                         : t`Retried ${retryCount}x`
                       : null
                   const failure = queueErrorMessage(q, renderLabel)
@@ -563,7 +576,7 @@ export default function ActivityPage() {
                       <Table.Td>
                         <Tooltip label={tooltipLabel} withArrow disabled={!failure && !retryInfo || !!rejectionText}>
                           <StatusDot
-                            tone={rejectionText ? 'warn' : held ? 'neutral' : statusToken(visual.color)}
+                            tone={rejectionText || held ? 'warn' : statusToken(visual.color)}
                             live={isQueueActive(q.status)}
                           >
                             {rejectionText ?? (held ? t`Paused` : renderLabel(visual.label))}
@@ -745,6 +758,8 @@ export default function ActivityPage() {
         ) : history.items.length === 0 ? (
           <EmptyState
             compact
+            framed
+            mood="asleep"
             title={t`No history yet`}
             description={t`Completed and cancelled downloads show up here.`}
           />
@@ -881,6 +896,7 @@ export default function ActivityPage() {
           ) : upgradesUnset ? (
             <EmptyState
               compact
+              framed
               mood="asking"
               title={t`Upgrades are not set up yet`}
               description={t`Give your series a quality profile and Maki replaces files that fall short of it, then lists every swap here.`}
@@ -890,7 +906,7 @@ export default function ActivityPage() {
           ) : (
             <Stack gap="xl">
               <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
-                <Text size="sm" c="var(--ink-3)">
+                <Text component="div" size="sm" c="var(--ink-3)">
                   {(() => {
                     // The daily job is the only thing that writes `lastScanDate`; a per-series scan
                     // from this same button doesn't touch it, so the label says which one this is.
@@ -904,19 +920,21 @@ export default function ActivityPage() {
                       ? formatCalendarDate(upgradesSummary.lastVolumeSearchDate)
                       : t`never`
                     return (
-                      <>
-                        <Trans>Last library scan: {lastScanText}</Trans>
-                        {' · '}
-                        <Trans>Last volume search: {lastVolumeSearchText}</Trans>
-                        {' · '}
-                        <Trans>Trash: {trashSize} across {trashFilesText}</Trans>
-                        {retentionDays != null && (
-                          <>
-                            {', '}
-                            <Plural value={retentionDays} one="kept # day" other="kept # days" />
-                          </>
-                        )}
-                      </>
+                      <MetaList
+                        items={[
+                          <Trans key="scan">Last library scan: {lastScanText}</Trans>,
+                          <Trans key="volume">Last volume search: {lastVolumeSearchText}</Trans>,
+                          <span key="trash">
+                            <Trans>Trash: {trashSize} across {trashFilesText}</Trans>
+                            {retentionDays != null && (
+                              <>
+                                {', '}
+                                <Plural value={retentionDays} one="kept # day" other="kept # days" />
+                              </>
+                            )}
+                          </span>,
+                        ]}
+                      />
                     )
                   })()}
                 </Text>
@@ -925,7 +943,7 @@ export default function ActivityPage() {
                     <Button
                       size="xs"
                       variant="default"
-                      leftSection={<IconSearch size={14} />}
+                      leftSection={<IconSearch size={16} />}
                       loading={runVolumeSearch.isPending}
                       disabled={upgradesSummary.scanRunning}
                       onClick={runUpgradeVolumeSearch}
@@ -935,7 +953,7 @@ export default function ActivityPage() {
                     <Button
                       size="xs"
                       variant="default"
-                      leftSection={<IconRefresh size={14} />}
+                      leftSection={<IconRefresh size={16} />}
                       loading={runScan.isPending}
                       disabled={upgradesSummary.scanRunning}
                       onClick={runUpgradeScan}
@@ -958,6 +976,7 @@ export default function ActivityPage() {
               {upgradesQuiet && (
                 <EmptyState
                   compact
+                  framed
                   mood="pleased"
                   title={t`Every file meets its cutoff`}
                   description={t`Nothing has needed an upgrade yet. Files the upgrader replaces show up here.`}
@@ -966,7 +985,7 @@ export default function ActivityPage() {
 
               {!upgradesQuiet && (
               <Stack gap="sm">
-                <SectionHeader icon={IconSparkles} title={t`Recent upgrades`} count={upgradeHistory?.total} />
+                <SectionHeader icon={IconCircleArrowUp} title={t`Recent upgrades`} count={upgradeHistory?.total} />
                 {!upgradeHistory ? (
                   upgradeHistoryQuery.isError ? (
                     <LoadFailed query={upgradeHistoryQuery} />
@@ -976,6 +995,8 @@ export default function ActivityPage() {
                 ) : upgradeHistory.rows.length === 0 ? (
                   <EmptyState
                     compact
+                    framed
+                    mood="asleep"
                     title={t`No upgrades yet`}
                     description={t`Files replaced by the automatic upgrader show up here.`}
                   />
@@ -1072,7 +1093,7 @@ export default function ActivityPage() {
                                           aria-label={expanded ? t`Hide replaced files` : t`Show replaced files`}
                                           aria-expanded={expanded}
                                         >
-                                          {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                                          {expanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
                                         </ActionIcon>
                                       </Group>
                                     </Table.Td>
@@ -1115,9 +1136,10 @@ export default function ActivityPage() {
                                       <Table.Tr key={row.id}>
                                         <Table.Td colSpan={2} className="series-cell-indent">
                                           <Text size="xs" c="var(--ink-3)" className="tnum">
-                                            {chapterRowLabel(row)}
-                                            {' · '}
-                                            {snapshotLabel(renderLabel, sourceLabel, row.before)}
+                                            <MetaList
+                                              inline
+                                              items={[chapterRowLabel(row), snapshotLabel(renderLabel, sourceLabel, row.before)]}
+                                            />
                                           </Text>
                                         </Table.Td>
                                         <Table.Td data-priority="low" />
@@ -1162,11 +1184,12 @@ export default function ActivityPage() {
                 ) : !upgradesSummary.profilesConfigured ? (
                   <EmptyState
                     compact
+                    framed
+                    mood="asking"
                     title={t`No quality profile assigned yet`}
                     description={
                       <Trans>
-                        Nothing here has a quality profile of its own or an instance default to fall back
-                        to, so nothing can be judged against a cutoff. Set one up in{' '}
+                        Set one up in{' '}
                         <Anchor component={Link} to="/settings?tab=downloads&s=profiles">
                           Settings - Quality profiles
                         </Anchor>
@@ -1177,6 +1200,8 @@ export default function ActivityPage() {
                 ) : cutoffUnmet.total === 0 ? (
                   <EmptyState
                     compact
+                    framed
+                    mood="pleased"
                     title={t`Every file meets its cutoff`}
                     description={t`Nothing downloaded falls short of the quality profile assigned to it.`}
                   />

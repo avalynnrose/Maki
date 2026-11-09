@@ -63,7 +63,7 @@ export const MediumConfidence: Story = {
 export const RunningLate: Story = {
   args: { outlook: lateOutlook },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText(/^Running late\. It was likely /)).toBeVisible()
+    await expect(await canvas.findByText(/^Later than expected\. We guessed /)).toBeVisible()
   },
 }
 
@@ -86,6 +86,22 @@ export const NotChecked: Story = {
   args: { outlook: finishedOutlook },
   play: async ({ canvas }) => {
     await expect(await canvas.findByText(/Not checked for new chapters/)).toBeVisible()
+  },
+}
+
+export const NotCheckedFinished: Story = {
+  args: { outlook: finishedOutlook, idleReason: 'finished' },
+  play: async ({ canvas }) => {
+    await expect(
+      await canvas.findByText('Not checked for new chapters: the series is finished and every chapter is listed.'),
+    ).toBeVisible()
+  },
+}
+
+export const NotCheckedNoSource: Story = {
+  args: { outlook: finishedOutlook, idleReason: 'noSource' },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByText('Not checked for new chapters: no source is switched on.')).toBeVisible()
   },
 }
 

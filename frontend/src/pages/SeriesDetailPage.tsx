@@ -1,5 +1,5 @@
 import { errorText } from '../api/errorText'
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode, RefObject } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { msg, plural, t as staticT } from '@lingui/core/macro'
@@ -22,8 +22,8 @@ import {
   Pagination,
   Paper,
   Radio,
-  SegmentedControl,
   Select,
+  Spoiler,
   Stack,
   Table,
   Tabs,
@@ -38,10 +38,13 @@ import {
   IconArrowLeft,
   IconBook,
   IconChevronDown,
+  IconCheck,
+  IconFilter,
   IconCircleCheck,
   IconDownload,
   IconEye,
   IconEyeCheck,
+  IconHistory,
   IconLink,
   IconLinkOff,
   IconListCheck,
@@ -55,15 +58,23 @@ import {
   IconEyeOff,
   IconSortAscendingNumbers,
   IconSortDescendingNumbers,
-} from '@tabler/icons-react'
+  IconDatabase,
+  IconFileText,
+} from '../lib/icons'
 import { useMediaQuery } from '@mantine/hooks'
-import { notifications } from '@mantine/notifications'
+import { notifications } from '../lib/toast'
+import { onRovingKeyDown } from '../lib/rovingFocus'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   useChapters,
   useSourceMappings,
   useSources,
+  useArchiveSeries,
+  useDismissArchiveHint,
+  useDismissRateHint,
   useDeleteSeries,
+  useRemoveArchivedFiles,
+  useRestoreSeries,
   useMoveSeries,
   useRefreshMetadata,
   useRefreshSeries,
@@ -76,12 +87,18 @@ import {
   useSeries,
   useSeriesDetail,
   useSetChaptersWanted,
+  useClearDelisted,
   useSetIncognito,
   useSetSeriesNotificationMode,
   useSetMonitorMode,
   useSetUpgradeProfile,
   useSetReadFileCleanup,
+  useSetSeriesPageConversion,
+  useRateSeries,
   useSetRating,
+  useFinalizeRating,
+  useSetProvisionalRating,
+  useDismissRatingCheckpoint,
   useToggleChapterWanted,
   useUnlinkChapters,
   useDeleteChapterFiles,
@@ -97,6 +114,8 @@ import {
   useSetChaptersState,
   type ChapterReadState,
 } from '../api/reader'
+import { useSeriesNoteCounts } from '../api/notes'
+import NotesPanel from '../components/notes/NotesPanel'
 import { useApplyAnimeResume, useDismissAnimeResume, useSeriesAnimeResume } from '../api/animeResume'
 import { useCreateSeriesRequest } from '../api/requests'
 import { altTitleLabel, readableTitles } from '../api/titles'
@@ -120,6 +139,7 @@ import { useLabel } from '../i18n-context'
 import { useDocumentTitle } from '../lib/documentTitle'
 import { usePageLabel } from '../lib/navHistory'
 import { AnimeCoverageBar } from '../components/AnimeCoverageBar'
+import { TYPE_LABELS } from '../components/CatalogueFilters'
 import { LinkChaptersModal } from '../components/LinkChaptersModal'
 import { RelinkFilesModal } from '../components/RelinkFilesModal'
 import { MetadataLinks } from '../components/MetadataLinks'
@@ -139,8 +159,25 @@ import {
   type ChapterRowActions,
   type ChapterSpanRowActions,
 } from '../components/series/ChapterTableRows'
-import { chapterLabel, readStateOf, type FileOrigin } from '../components/series/chapterTable'
+import {
+  chapterLabel,
+  finishedHighWater,
+  isSkipped,
+  readLanguagesOf,
+  readStateOf,
+  type FileOrigin,
+} from '../components/series/chapterTable'
+import { ArchivedBanner } from '../components/series/ArchivedBanner'
+import { ArchiveHint } from '../components/series/ArchiveHint'
+import { RateHint } from '../components/series/RateHint'
+import { RatingCheckpointPrompt } from '../components/series/RatingCheckpointPrompt'
+import { ratesProvisionally } from '../lib/rating'
+import { RemoveArchivedFilesDialog } from '../components/series/RemoveArchivedFilesDialog'
+import { ArchiveSeriesDialog } from '../components/series/ArchiveSeriesDialog'
 import { RemoveSeriesDialog } from '../components/series/RemoveSeriesDialog'
+import { UndoConversionModal } from '../components/series/UndoConversionModal'
+import { useSeriesConversion } from '../api/pageConversion'
+import { RestoreSeriesDialog } from '../components/series/RestoreSeriesDialog'
 import { SeriesActionsMenu } from '../components/series/SeriesActionsMenu'
 import { EditMetadataModal, MetadataLock } from '../components/series/EditMetadataModal'
 import { MetadataHistoryModal } from '../components/series/MetadataHistoryModal'
@@ -163,15 +200,20 @@ import {
 } from '../components/ui/status'
 import { readStored, writeStored } from '../components/ui/viewPrefs'
 import { MonoValue } from '../components/ui/MonoValue'
+import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { useColumnWidths, type ColumnSpec } from '../lib/useColumnWidths'
 import { useStableActions } from '../lib/useStableActions'
 import { SurfaceFrame } from '../components/ui/SurfaceFrame'
 import { EmptyState } from '../components/ui/EmptyState'
+import { FigureStripReveal, HintLabel } from '../components/ui/FigureStrip'
 import { Panel } from '../components/ui/Panel'
+import { PanelTitle } from '../components/ui/PanelTitle'
 import { LuckyButton } from '../components/LuckyButton'
 import { isUnfinished } from '../lib/lucky'
+import { activeSeries } from '../lib/series'
+import { showRestoreResult } from '../components/series/restoreToast'
 import { buildAnimeSpans, mergeAnimeMarkers, type AnimeSpan } from '../lib/animeCoverage'
-import { cleanSynopsis } from '../lib/synopsis'
+import { cleanSynopsis, splitSynopsis } from '../lib/synopsis'
 import { useIncognitoOptions } from '../components/ui/incognito'
 import { useSeriesNotificationOptions } from '../components/ui/seriesNotifications'
 import { scrollBehavior } from '../lib/scrollBehavior'
@@ -201,11 +243,14 @@ const CHAPTER_FILTERS = [
   'all',
   'wanted',
   'missing',
+  'fileMissing',
   'downloaded',
   'unread',
   'main',
   'specials',
   'cutoffUnmet',
+  'skipped',
+  'delisted',
 ] as const
 type ChapterFilter = (typeof CHAPTER_FILTERS)[number]
 
@@ -217,7 +262,7 @@ const CHAPTER_COLUMNS_STORAGE_KEY = 'series-chapter-columns'
 const CHAPTER_COLUMNS = {
   chapter: { width: 200, min: 110 },
   released: { width: 120, min: 90 },
-  source: { width: 190, min: 100 },
+  source: { width: 220, min: 100 },
   status: { width: 240, min: 140 },
 }
 // The Wanted and actions columns hold fixed-size controls, and Title takes whatever is left, down
@@ -333,20 +378,25 @@ const chapterFilters: Record<string, (c: ChapterDto) => boolean> = {
   all: () => true,
   wanted: (c) => c.wanted,
   missing: (c) => !c.hasFile && !c.fileRemovedAt,
-  downloaded: (c) => c.hasFile,
+  fileMissing: (c) => c.hasFile && c.fileMissing,
+  downloaded: (c) => c.hasFile && !c.fileMissing,
   specials: isSpecial,
   // A one-shot has no number and counts as main, matching NewChapterMonitorMode.MainOnly.
   main: (c) => !isSpecial(c),
   // Matches `/upgrades/cutoff-unmet`, which excludes trusted files even when their cutoff isn't met.
   cutoffUnmet: (c) => c.fileQuality?.cutoffMet === false && !c.fileQuality?.trusted,
+  delisted: (c) => c.delistedAt != null,
 }
 
 // Errors are reported globally (see main.tsx); only success needs saying here. `info` is for
 // outcomes that aren't failures but aren't wins either — a download action that found nothing
 // left to queue, which would otherwise report a cheerful "Queued 0".
+// Hover alone leaves keyboard users without the reason a control is switched off.
+const TOOLTIP_EVENTS = { hover: true, focus: true, touch: true }
+
 const notify = {
   ok: (message: string) => notifications.show({ message, color: 'var(--ok)' }),
-  info: (message: string) => notifications.show({ message, color: 'var(--warn)' }),
+  info: (message: string) => notifications.show({ message, color: 'var(--info)' }),
   err: (message: string) => notifications.show({ message, color: 'var(--danger)' }),
 }
 
@@ -441,13 +491,15 @@ function SeriesDetailBody() {
 
   // `sourceMatchFinished` normally refreshes these, but this page also polls the series row while
   // matching runs, so it can notice the flag clearing on a connection that missed the push. The
-  // mappings and the chapter list arrive with it, and neither has a flag of its own to poll on.
+  // mappings, the chapter list and the measurement started after the match arrive with it, and none
+  // has a flag of its own to poll on.
   const wasMatching = useRef(false)
   useEffect(() => {
     const matching = series?.sourceMatchPending ?? false
     if (wasMatching.current && !matching) {
       void queryClient.invalidateQueries({ queryKey: ['sourcemappings', seriesId] })
       void queryClient.invalidateQueries({ queryKey: ['chapters', seriesId] })
+      void queryClient.invalidateQueries({ queryKey: ['source-order', seriesId] })
     }
     wasMatching.current = matching
   }, [series?.sourceMatchPending, seriesId, queryClient])
@@ -482,6 +534,12 @@ function SeriesDetailBody() {
       (c: ChapterDto) => readStateOf(readProgress.get(c.id)),
       [readProgress],
   )
+  const { data: noteCountRows } = useSeriesNoteCounts(seriesId)
+  const noteCounts = useMemo(
+      () => new Map((noteCountRows ?? []).map((n) => [n.chapterId, n])),
+      [noteCountRows],
+  )
+  const [notesPanel, setNotesPanel] = useState<{ chapterId: number; open: boolean } | null>(null)
   const canSaveOffline = pwaSupported()
   const { records: offlineRecords, progress: offlineProgress } = useOfflineChapters()
   const offlineSaved = useMemo(
@@ -493,20 +551,12 @@ function SeriesDetailBody() {
       () => new Map((queue?.items ?? []).filter((q) => q.seriesId === seriesId).map((q) => [q.chapterId, q])),
       [queue, seriesId],
   )
-  /**
-   * Read-aware filters, kept separate from `chapterFilters` because they need the progress map.
-   * Both only consider downloaded chapters, plus read ones whose file was removed: a missing chapter is
-   * neither read nor "left to read".
-   */
-  const filters = useMemo<Record<string, (c: ChapterDto) => boolean>>(
-      () => ({
-        ...chapterFilters,
-        unread: (c: ChapterDto) => c.hasFile && !readStateFor(c).read,
-        read: (c: ChapterDto) => (c.hasFile || c.fileRemovedAt != null) && readStateFor(c).read,
-      }),
-      [readStateFor],
-  )
   const deleteSeries = useDeleteSeries()
+  const archiveSeries = useArchiveSeries()
+  const dismissArchiveHint = useDismissArchiveHint()
+  const dismissRateHint = useDismissRateHint()
+  const restoreSeries = useRestoreSeries()
+  const removeArchivedFiles = useRemoveArchivedFiles()
   const refresh = useRefreshSeries()
   const refreshMetadata = useRefreshMetadata()
   const rescan = useRescanSeries()
@@ -529,6 +579,7 @@ function SeriesDetailBody() {
   const setMonitorMode = useSetMonitorMode()
   const setUpgradeProfile = useSetUpgradeProfile()
   const setReadFileCleanup = useSetReadFileCleanup()
+  const setSeriesPageConversion = useSetSeriesPageConversion()
   const { data: upgradeProfiles } = useUpgradeProfiles()
   const setFileTrusted = useSetFileTrusted()
   const upgradeChapterNow = useUpgradeChapterNow()
@@ -592,9 +643,26 @@ function SeriesDetailBody() {
   const [upgradeNowModalOpen, setUpgradeNowModalOpen] = useState(false)
   const setIncognito = useSetIncognito()
   const setNotificationMode = useSetSeriesNotificationMode()
-  const setRating = useSetRating()
+  const rateSeries = useRateSeries()
+  const finalizeRating = useFinalizeRating()
+  const saveLeavingRating = useSetRating({ silent: true })
+  const setSoFar = useSetProvisionalRating()
+  const dismissCheckpoint = useDismissRatingCheckpoint()
   const unlinkChapters = useUnlinkChapters()
   const setChaptersWanted = useSetChaptersWanted()
+  const clearDelisted = useClearDelisted()
+  const [keepingFrom, setKeepingFrom] = useState<'alert' | 'select'>('alert')
+  // The alert fades out after Keep; holding the last ids stops its title reading 0 on the way.
+  const [alertDelistedIds, setAlertDelistedIds] = useState<number[]>([])
+  const keepDelisted = (chapterIds: number[], from: 'alert' | 'select') => {
+    setKeepingFrom(from)
+    clearDelisted.mutate(chapterIds, {
+      onSuccess: (r) => {
+        notify.ok(plural(r.cleared, { one: 'Kept # chapter', other: 'Kept # chapters' }))
+        if (from === 'select') exitSelectMode()
+      },
+    })
+  }
   const deleteChapters = useDeleteChapters()
   const deleteChapterFiles = useDeleteChapterFiles()
   const [releaseModalOpen, setReleaseModalOpen] = useState(false)
@@ -651,6 +719,15 @@ function SeriesDetailBody() {
   const [chapterPage, setChapterPage] = useState(1)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  // Only notes the viewer can see; other people's private notes are not announced.
+  const selectedNoteCount = useMemo(() => {
+    let total = 0
+    for (const id of selected) {
+      const counts = noteCounts.get(id)
+      if (counts) total += counts.total
+    }
+    return total
+  }, [selected, noteCounts])
   // Chapter ids the link dialog is working on; null keeps it closed. Set from the selection
   // bar or from a single missing row's link button.
   const [linkChapterIds, setLinkChapterIds] = useState<number[] | null>(null)
@@ -661,18 +738,26 @@ function SeriesDetailBody() {
   const [deleteFileIds, setDeleteFileIds] = useState<number[] | null>(null)
   const [deleteSeriesModalOpen, setDeleteSeriesModalOpen] = useState(false)
   const [deleteSeriesFiles, setDeleteSeriesFiles] = useState(false)
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false)
+  const [archiveRemoveFiles, setArchiveRemoveFiles] = useState(false)
+  const [leavingRating, setLeavingRating] = useState<number | null>(null)
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false)
+  const [removeFilesModalOpen, setRemoveFilesModalOpen] = useState(false)
   const binDays = useRecycleBinDays(deleteChaptersModalOpen || deleteFileIds !== null)
   // Which delete dialog the server answered with "the recycle bin cannot take these".
-  const [binRefused, setBinRefused] = useState<'chapters' | 'files' | 'series' | null>(null)
-  const onBinRefused = (dialog: 'chapters' | 'files' | 'series') => (error: unknown) => {
+  const [binRefused, setBinRefused] = useState<'chapters' | 'files' | 'series' | 'archive' | 'archiveFiles' | null>(null)
+  const onBinRefused = (dialog: 'chapters' | 'files' | 'series' | 'archive' | 'archiveFiles') => (error: unknown) => {
     if (offersPermanentDelete(error)) setBinRefused(dialog)
   }
 
   // Without DownloadChapters the two buttons that queue downloads become one that asks an admin to.
-  const { can } = useAuth()
+  const { can, me, singleUser } = useAuth()
+  const { data: conversionHistory } = useSeriesConversion(seriesId, can('Admin'))
+  const [undoConversionOpen, setUndoConversionOpen] = useState(false)
   const canDownload = can('DownloadChapters')
   const canEditMetadata = can('EditMetadata')
   const canDelete = can('DeleteSeries')
+  const canArchive = can('ArchiveSeries')
   const pendingProposalId = series?.pendingProposalId ?? null
   const { data: seriesProposals } = useTorrentProposals(seriesId, canDownload && pendingProposalId != null)
   const pendingProposal = seriesProposals?.find((p) => p.id === pendingProposalId) ?? null
@@ -682,6 +767,22 @@ function SeriesDetailBody() {
   const canManageSources = can('ManageSources')
   const { data: sourceMappings } = useSourceMappings(seriesId, canManageSources)
   const enabledMappings = (sourceMappings ?? []).filter((m) => m.enabled).length
+  /**
+   * Read-aware filters, kept separate from `chapterFilters` because they need the progress map.
+   * `unread` and `read` only consider downloaded chapters, plus read ones whose file was removed: a
+   * missing chapter is neither read nor "left to read". `skipped` is the opposite case, chapters
+   * passed over, so it looks at wanted ones whether or not a file exists.
+   */
+  const readLanguages = useMemo(() => readLanguagesOf(sourceMappings, sources), [sourceMappings, sources])
+  const filters = useMemo<Record<string, (c: ChapterDto) => boolean>>(() => {
+    const highWater = finishedHighWater(chapters ?? [], readProgress)
+    return {
+      ...chapterFilters,
+      unread: (c: ChapterDto) => c.hasFile && !readStateFor(c).read,
+      read: (c: ChapterDto) => (c.hasFile || c.fileRemovedAt != null) && readStateFor(c).read,
+      skipped: (c: ChapterDto) => isSkipped(c, highWater, readProgress, readLanguages),
+    }
+  }, [chapters, readProgress, readStateFor, readLanguages])
   const [pickChapter, setPickChapter] = useState<PickChapter | null>(null)
   const [requestModalOpen, setRequestModalOpen] = useState(false)
   const [requestStart, setRequestStart] = useState<number | ''>('')
@@ -734,6 +835,7 @@ function SeriesDetailBody() {
       (chapterFilterPreference === 'main' && !hasSpecials) ||
       (chapterFilterPreference === 'unread' && !canFilterUnread) ||
       (chapterFilterPreference === 'cutoffUnmet' && !cutoffUnmetChipVisible) ||
+      (chapterFilterPreference === 'skipped' && !readTracking) ||
       rememberedFilterMatchesNothing
           ? 'all'
           : chapterFilterPreference
@@ -1225,7 +1327,7 @@ function SeriesDetailBody() {
                     aria-label={t`Clear chapter search`}
                     onClick={() => setChapterSearch('')}
                 >
-                  <IconX size={14} />
+                  <IconX size={16} />
                 </ActionIcon>
             ) : null
           }
@@ -1308,6 +1410,7 @@ function SeriesDetailBody() {
     deleteFile: (chapterId) => setDeleteFileIds([chapterId]),
     saveOffline: (chapterId) => void saveChaptersOffline([{ chapterId, seriesId }]),
     removeOffline: (chapterId) => void removeChaptersOffline([chapterId]),
+    openNotes: (chapterId) => setNotesPanel({ chapterId, open: true }),
     toggleSpanFold,
     setMarkerRef,
   })
@@ -1341,10 +1444,10 @@ function SeriesDetailBody() {
   const location = useLocation()
   const arrivedLucky = Boolean((location.state as { lucky?: boolean } | null)?.lucky)
   const [lucky, setLucky] = useState(arrivedLucky)
-  const { data: library } = useSeries()
+  const { data: library } = useSeries(lucky)
   const luckyPool = useMemo(
     () =>
-      (library ?? [])
+      activeSeries(library ?? [])
         .filter((s) => s.id !== seriesId && isUnfinished(s))
         .map((s) => ({ key: String(s.id), title: s.displayTitle, coverUrl: s.coverUrl })),
     [library, seriesId],
@@ -1411,7 +1514,23 @@ function SeriesDetailBody() {
 
   const status = seriesStatusVisual(series.status)
   const contentRating = contentRatingVisual(series.contentRating)
-  const altTitles = readableTitles(series.altTitles, i18n.locale)
+  const altTitles = readableTitles(series.altTitles ?? [], i18n.locale)
+  const synopsis = splitSynopsis(cleanSynopsis(series.overview))
+  const synopsisSource = synopsis.source
+  const synopsisExtras = (synopsis.notes.length > 0 || synopsisSource) && (
+      <div className="series-synopsis-extras">
+        {synopsis.notes.length > 0 && (
+            <ul className="series-synopsis-notes">
+              {synopsis.notes.map((note, i) => <li key={i}>{note}</li>)}
+            </ul>
+        )}
+        {synopsisSource && (
+            <Text size="xs" c="var(--ink-4)">
+              <Trans>Source: {synopsisSource}</Trans>
+            </Text>
+        )}
+      </div>
+  )
   const seriesTitle = series.title
   const scanSeriesForUpgrades = () =>
     runUpgradeScan.mutate(seriesId, {
@@ -1441,13 +1560,23 @@ function SeriesDetailBody() {
     })
   const wantedFilterCount = chapters?.filter(chapterFilters.wanted).length ?? 0
   const missingFilterCount = chapters?.filter(chapterFilters.missing).length ?? 0
+  const fileMissingFilterCount = chapters?.filter(chapterFilters.fileMissing).length ?? 0
   const downloadedFilterCount = chapters?.filter(chapterFilters.downloaded).length ?? 0
   const unreadFilterCount = chapters?.filter(filters.unread).length ?? 0
   const specialsFilterCount = chapters?.filter(chapterFilters.specials).length ?? 0
   const mainFilterCount = chapters?.filter(chapterFilters.main).length ?? 0
   const readFilterCount = chapters?.filter(filters.read).length ?? 0
   const cutoffUnmetFilterCount = chapters?.filter(chapterFilters.cutoffUnmet).length ?? 0
+  const skippedFilterCount = chapters?.filter(filters.skipped).length ?? 0
+  const delistedFilterCount = chapters?.filter(chapterFilters.delisted).length ?? 0
+  const delistedWithFileIds = (chapters ?? []).filter((c) => c.delistedAt && c.hasFile).map((c) => c.id)
+  if (delistedWithFileIds.length > 0 && delistedWithFileIds.join() !== alertDelistedIds.join()) {
+    setAlertDelistedIds(delistedWithFileIds)
+  }
+  const selectionHasDelisted = selected.size > 0 && (chapters ?? []).some((c) => c.delistedAt && selected.has(c.id))
   const selectedCount = selected.size
+  const notesChapter = notesPanel ? chapters?.find((c) => c.id === notesPanel.chapterId) : undefined
+  const notesChapterRead = notesChapter ? readStateFor(notesChapter) : null
   const visibleAllCount = visibleChapters.length
   const visibleMainCount = visibleMain.length
   const visibleSpecialsCount = visibleSpecials.length
@@ -1456,8 +1585,14 @@ function SeriesDetailBody() {
       ? [
         { value: 'all', label: t`All` },
         { value: 'wanted', label: t`Wanted (${wantedFilterCount})` },
-        { value: 'missing', label: t`Missing (${missingFilterCount})` },
-        { value: 'downloaded', label: t`Have (${downloadedFilterCount})` },
+        { value: 'missing', label: t`Not downloaded (${missingFilterCount})` },
+        ...(fileMissingFilterCount > 0
+            ? [{ value: 'fileMissing', label: t`File missing (${fileMissingFilterCount})` }]
+            : []),
+        ...(delistedFilterCount > 0
+            ? [{ value: 'delisted', label: t`Delisted (${delistedFilterCount})` }]
+            : []),
+        { value: 'downloaded', label: t`Downloaded (${downloadedFilterCount})` },
         ...(canFilterUnread
             ? [{ value: 'unread', label: t`Unread (${unreadFilterCount})` }]
             : []),
@@ -1467,8 +1602,44 @@ function SeriesDetailBody() {
         ...(cutoffUnmetChipVisible
             ? [{ value: 'cutoffUnmet', label: t`Cutoff unmet (${cutoffUnmetFilterCount})` }]
             : []),
+        ...(readTracking && skippedFilterCount > 0
+            ? [{ value: 'skipped', label: t`Skipped (${skippedFilterCount})` }]
+            : []),
       ]
       : []
+  const { total: chaptersCounted } = progress
+  // The server counts a chapter whose file vanished from disk as obtained; the heading sits next to
+  // the "no file on disk" count, so it leaves those out.
+  const chaptersHave = Math.max(0, progress.have - fileMissingFilterCount)
+  const wantedColumnTip = t`Switch on for chapters you want. They count toward the series total and can be downloaded. Chapters you already have count either way.`
+  const chapterFilterTips: Record<string, string> = {
+    wanted: t`Chapters with Wanted switched on, downloaded or not.`,
+    missing: t`Chapters with no file on disk, leaving out files that were deleted on purpose.`,
+    fileMissing: t`Chapters whose file the last health scan couldn't find on disk.`,
+  }
+  const chapterFilterChips = chapterFilterData.map((o) => {
+    const active = o.value === chapterFilter
+    const chip = (
+        <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            className="tag-chip tnum"
+            data-interactive
+            data-active={active || undefined}
+            onClick={() => setChapterFilter(o.value)}
+        >
+          {o.label}
+        </button>
+    )
+    return chapterFilterTips[o.value] ? (
+        <Tooltip key={o.value} label={chapterFilterTips[o.value]} withArrow multiline maw={260}>
+          {chip}
+        </Tooltip>
+    ) : chip
+  })
 
   const queueNext = (count: number) => {
     downloadNext.mutate(
@@ -1497,12 +1668,24 @@ function SeriesDetailBody() {
     queueAllWanted()
   }
 
-  const submitRating = (rating: number | null) =>
-      setRating.mutate(
-          { seriesId, rating },
+  const submitRating = (rating: number | null) => {
+    if (!series) return
+    rateSeries.rate(series, rating, (soFar) =>
+        notify.ok(
+            rating === null
+                ? staticT`Rating cleared`
+                : soFar ? staticT`Rated ${rating}/10 so far` : staticT`Rated ${rating}/10`,
+        ),
+    )
+  }
+
+  const keepRating = () =>
+      finalizeRating.mutate(
+          { seriesId },
           {
-            onSuccess: () =>
-                notify.ok(rating === null ? staticT`Rating cleared` : staticT`Rated ${rating}/10`),
+            onSuccess: ({ rating }) => {
+              if (rating != null) notify.ok(staticT`Rated ${rating}/10`)
+            },
           },
       )
 
@@ -1665,6 +1848,207 @@ function SeriesDetailBody() {
       },
     )
 
+  const openArchiveDialog = () => {
+    setArchiveRemoveFiles(false)
+    setLeavingRating(null)
+    setBinRefused(null)
+    setArchiveModalOpen(true)
+  }
+
+  const restoreArchived = (redownloadRemoved: boolean) =>
+    restoreSeries.mutate(
+      { id: series.id, redownloadRemoved },
+      {
+        onSuccess: (result) => {
+          setRestoreModalOpen(false)
+          showRestoreResult(result, redownloadRemoved)
+        },
+      },
+    )
+
+  // With every file gone there is a choice to make about fetching them again; otherwise nothing to ask.
+  const restoreFromMenu = () =>
+    series.chapterFileCount === 0 && series.removedChapterCount > 0 ? setRestoreModalOpen(true) : restoreArchived(false)
+
+  const removeArchivedSeriesFiles = (permanent = false) =>
+    removeArchivedFiles.mutate(
+      { id: series.id, permanent },
+      {
+        onSuccess: () => {
+          setRemoveFilesModalOpen(false)
+          setBinRefused(null)
+          notify.ok(staticT`Files removed`)
+        },
+        onError: onBinRefused('archiveFiles'),
+      },
+    )
+
+  const archived = series.archivedAt != null
+  const archivedReason = archived ? t`Archived series are not checked against sources. Restore it first.` : null
+  const archivedBy =
+    archived && !singleUser && me != null && series.archivedByUserId === me.id ? (me.displayName ?? me.userName) : null
+
+  type ChapterBulkAction = {
+    key: string
+    label: ReactNode
+    icon: ReactNode
+    run: () => void
+    loading?: boolean
+    disabled?: boolean
+  }
+  // Accent buttons for the everyday three, everything else in More, and the destructive pair behind
+  // one red menu. A colour per action read as a row of unrelated badges.
+  const chapterPrimaryActions: ChapterBulkAction[] = [
+    ...(canDownload
+      ? [{
+          key: 'download',
+          label: <Trans>Download</Trans>,
+          icon: <IconDownload size={16} />,
+          disabled: archived,
+          loading: downloadChapters.isPending,
+          run: () => {
+            if (archived) return
+            downloadChapters.mutate([...selected], {
+              onSuccess: (r) =>
+                r.queued > 0
+                  ? notify.ok(plural(r.queued, { one: 'Queued # chapter', other: 'Queued # chapters' }))
+                  : notify.info(r.error ?? staticT`Nothing to queue, those chapters are already on disk`),
+            })
+          },
+        }]
+      : []),
+    ...(readTracking
+      ? [{
+          key: 'read',
+          label: <Trans>Mark read</Trans>,
+          icon: <IconEyeCheck size={16} />,
+          loading: setChaptersState.isPending && setChaptersState.variables?.state === 'read',
+          run: () => applyReadState([...selected], 'read'),
+        }]
+      : []),
+    ...(canEditMetadata
+      ? [{
+          key: 'want',
+          label: <Trans>Want</Trans>,
+          icon: <IconEye size={16} />,
+          loading: setChaptersWanted.isPending && setChaptersWanted.variables?.wanted === true,
+          run: () => applyWanted([...selected], true),
+        }]
+      : []),
+  ]
+  const chapterMoreGroups: ChapterBulkAction[][] = [
+    readTracking
+      ? [
+          {
+            key: 'unread',
+            label: <Trans>Mark unread</Trans>,
+            icon: <IconEyeOff size={16} />,
+            loading: setChaptersState.isPending && setChaptersState.variables?.state === 'unread',
+            run: () => applyReadState([...selected], 'unread'),
+          },
+          {
+            key: 'watched',
+            label: <Trans>Mark watched</Trans>,
+            icon: <IconDeviceTv size={16} />,
+            loading: setChaptersState.isPending && setChaptersState.variables?.state === 'watched',
+            run: () => applyReadState([...selected], 'watched'),
+          },
+        ]
+      : [],
+    canEditMetadata
+      ? [
+          {
+            key: 'unwant',
+            label: <Trans>Don't want</Trans>,
+            icon: <IconEyeOff size={16} />,
+            loading: setChaptersWanted.isPending && setChaptersWanted.variables?.wanted === false,
+            run: () => applyWanted([...selected], false),
+          },
+        ]
+      : [],
+    canEditMetadata && selectionHasDelisted
+      ? [
+          {
+            key: 'keepDelisted',
+            label: <Trans>Keep delisted chapters</Trans>,
+            icon: <IconCircleCheck size={16} />,
+            loading: clearDelisted.isPending && keepingFrom === 'select',
+            run: () => keepDelisted([...selected], 'select'),
+          },
+        ]
+      : [],
+    canEditMetadata
+      ? [
+          {
+            key: 'link',
+            label: <Trans>Link to file</Trans>,
+            icon: <IconLink size={16} />,
+            run: () => setLinkChapterIds([...selected]),
+          },
+          {
+            key: 'unlink',
+            label: <Trans>Unlink</Trans>,
+            icon: <IconLinkOff size={16} />,
+            loading: unlinkChapters.isPending,
+            run: () =>
+              unlinkChapters.mutate([...selected], {
+                onSuccess: (r) => {
+                  notify.ok(plural(r.unlinked, { one: 'Unlinked # chapter', other: 'Unlinked # chapters' }))
+                  exitSelectMode()
+                },
+              }),
+          },
+        ]
+      : [],
+  ].filter((g) => g.length > 0)
+  const chapterMoreBusy = chapterMoreGroups.some((g) => g.some((a) => a.loading))
+
+  const showArchivedToast = (filesKept: boolean) => {
+    const id = notifications.show({
+      color: 'var(--ok)',
+      autoClose: filesKept ? 8000 : 4000,
+      message: (
+        <Group gap="xs" wrap="nowrap" justify="space-between">
+          <Text size="sm">
+            <Trans context="series">Archived</Trans>
+          </Text>
+          {filesKept && (
+            <Button
+              size="xs"
+              variant="subtle"
+              style={{ flexShrink: 0 }}
+              onClick={() => {
+                notifications.hide(id)
+                restoreArchived(false)
+              }}
+            >
+              <Trans>Undo</Trans>
+            </Button>
+          )}
+        </Group>
+      ),
+    })
+  }
+
+  const archiveCurrent = (permanent = false) =>
+    archiveSeries.mutate(
+      { id: series.id, removeFiles: archiveRemoveFiles, permanent },
+      {
+        onSuccess: () => {
+          setArchiveModalOpen(false)
+          setBinRefused(null)
+          showArchivedToast(!archiveRemoveFiles)
+          if (leavingRating != null) {
+            saveLeavingRating.mutate(
+              { seriesId: series.id, rating: leavingRating },
+              { onError: () => notify.err(staticT`Archived, but your rating didn't save`) },
+            )
+          }
+        },
+        onError: onBinRefused('archive'),
+      },
+    )
+
   return (
     <SurfaceFrame width="full" pageStyle="editorial">
       <Tabs
@@ -1675,11 +2059,14 @@ function SeriesDetailBody() {
           // Unmounted rather than hidden: the chapter table's season overlay measures real DOM rects,
           // and a laid-out-but-unpainted table reads every one of them as zero.
           keepMounted={false}
-          classNames={{ list: 'series-tabs', tab: 'series-tab', panel: 'series-body' }}
+          classNames={{ list: 'series-tabs page-tabs', tab: 'series-tab', panel: 'series-body' }}
       >
         <SeriesHero
             series={series}
             onRate={submitRating}
+            onFinalize={keepRating}
+            readUpTo={highestReadChapter}
+            nextChapter={nextChapter}
             actions={
               <>
                 {continueAt && (
@@ -1707,13 +2094,20 @@ function SeriesDetailBody() {
                     "next N" queues in chapter-number order using the same selector Smart top-ups use. */}
                       {!allWantedOnDisk && (
                         <Button.Group>
+                        {/* data-disabled rather than disabled: a disabled button gets no hover, so the
+                            tooltip saying why an archived series cannot download would never show. */}
+                        <Tooltip label={archivedReason} withArrow disabled={!archived} events={TOOLTIP_EVENTS}>
                         <Button
                             variant="default"
                             size="md"
                             radius="md"
                             leftSection={<IconDownload size={17} />}
                             loading={searchMissing.isPending || downloadNext.isPending}
-                            onClick={requestQueueAllWanted}
+                            data-disabled={archived || undefined}
+                            aria-disabled={archived || undefined}
+                            onClick={() => {
+                              if (!archived) requestQueueAllWanted()
+                            }}
                         >
                           {/* The count is the point of the label: it says what the click will actually
                         queue, so nobody has to open the Chapters tab to find out. */}
@@ -1723,6 +2117,22 @@ function SeriesDetailBody() {
                               <Trans>Download all wanted</Trans>
                           )}
                         </Button>
+                        </Tooltip>
+                        {archived ? (
+                        <Tooltip label={archivedReason} withArrow events={TOOLTIP_EVENTS}>
+                          <Button
+                              variant="default"
+                              size="md"
+                              radius="md"
+                              px={10}
+                              aria-label={t`More download options`}
+                              data-disabled
+                              aria-disabled
+                          >
+                            <IconChevronDown size={16} />
+                          </Button>
+                        </Tooltip>
+                        ) : (
                         <Menu position="bottom-end" withinPortal>
                           <Menu.Target>
                             <Button
@@ -1746,25 +2156,36 @@ function SeriesDetailBody() {
                             <Menu.Item onClick={() => setNextCountOpen(true)}><Trans>Next...</Trans></Menu.Item>
                           </Menu.Dropdown>
                         </Menu>
+                        )}
                         </Button.Group>
                       )}
+                      <Tooltip label={archivedReason} withArrow disabled={!archived} events={TOOLTIP_EVENTS}>
                       <Button
                           variant="default"
                           size="md"
                           radius="md"
                           leftSection={<IconSearch size={17} />}
-                          onClick={() => setReleaseModalOpen(true)}
+                          data-disabled={archived || undefined}
+                          aria-disabled={archived || undefined}
+                          onClick={() => {
+                            if (!archived) setReleaseModalOpen(true)
+                          }}
                       >
                         <Trans>Search releases</Trans>
                       </Button>
+                      </Tooltip>
                     </>
                 ) : (
+                    <Tooltip label={archivedReason} withArrow disabled={!archived} events={TOOLTIP_EVENTS}>
                     <Button
                         variant="default"
                         size="md"
                         radius="md"
                         leftSection={<IconSend size={17} />}
+                        data-disabled={archived || undefined}
+                        aria-disabled={archived || undefined}
                         onClick={() => {
+                          if (archived) return
                           setRequestStart('')
                           setRequestEnd('')
                           setRequestNote('')
@@ -1773,6 +2194,7 @@ function SeriesDetailBody() {
                     >
                       <Trans>Request chapters</Trans>
                     </Button>
+                    </Tooltip>
                 )}
                 <SeriesActionsMenu
                     monitorMode={series.monitorNewItems}
@@ -1785,11 +2207,23 @@ function SeriesDetailBody() {
                     onSetReadFileCleanup={(mode) =>
                         setReadFileCleanup.mutate({ seriesId, mode }, { onSuccess: () => notify.ok(staticT`Saved`) })
                     }
+                    pageConversion={series.pageConversion}
+                    canSetPageConversion={can('Admin')}
+                    onSetPageConversion={(mode) =>
+                        setSeriesPageConversion.mutate({ seriesId, mode }, { onSuccess: () => notify.ok(staticT`Saved`) })
+                    }
+                    onUndoConversion={
+                        conversionHistory && conversionHistory.restorableFiles > 0
+                            ? () => setUndoConversionOpen(true)
+                            : undefined
+                    }
                     canEdit={canEditMetadata}
                     canCleanUpReadFiles={canDelete}
                     canScanUpgrades={canDownload}
                     scanningUpgrades={runUpgradeScan.isPending || scanning}
-                    busy={refresh.isPending || refreshMetadata.isPending || rescan.isPending}
+                    refreshingChapters={refresh.isPending}
+                    refreshingMetadata={refreshMetadata.isPending}
+                    rescanning={rescan.isPending}
                     onRefreshChapters={() =>
                         refresh.mutate(seriesId, {
                           onSuccess: (r) =>
@@ -1873,6 +2307,11 @@ function SeriesDetailBody() {
                     onScanUpgrades={scanSeriesForUpgrades}
                     searchingVolumes={runVolumeSearch.isPending}
                     onSearchVolumes={searchSeriesVolumes}
+                    canArchive={canArchive}
+                    archived={archived}
+                    sourceToolsDisabledReason={archivedReason}
+                    onArchive={openArchiveDialog}
+                    onRestore={restoreFromMenu}
                     canRemove={can('DeleteSeries')}
                     onRemove={() => {
                       setDeleteSeriesFiles(false)
@@ -1896,7 +2335,16 @@ function SeriesDetailBody() {
                     onRemoveOffline={() => void removeSeriesOffline(seriesId)}
                 />
                 {/* A state, not a control: nothing here could enable a download button, so it stops posing as one. */}
-                {canDownload && allWantedOnDisk && chapters.length > 0 && (
+                {fileMissingFilterCount > 0 ? (tab !== 'chapters' && (
+                    <Text component="span" size="sm" c="var(--warn)" className="series-actions-done series-actions-done--warn tnum">
+                      <IconAlertTriangle size={16} />
+                      <Plural
+                          value={fileMissingFilterCount}
+                          one="# chapter has no file on disk"
+                          other="# chapters have no file on disk"
+                      />
+                    </Text>
+                )) : canDownload && allWantedOnDisk && chapters.length > 0 && (
                     <Tooltip label={t`Every wanted chapter is already on disk`} withArrow>
                       <Text component="span" size="sm" c="var(--ink-3)" className="series-actions-done">
                         <IconCircleCheck size={16} />
@@ -1921,6 +2369,50 @@ function SeriesDetailBody() {
             }
         />
 
+        {/* One hint at a time: rating comes first, the archive offer follows once it is settled. */}
+        {series.rateHintEligible ? (
+          <RateHint
+            soFar={series.provisionalRating ?? null}
+            onRate={submitRating}
+            onKeep={keepRating}
+            onDismiss={() => dismissRateHint.mutate(series.id)}
+          />
+        ) : series.ratingCheckpoint ? (
+          <RatingCheckpointPrompt
+            checkpoint={series.ratingCheckpoint}
+            soFar={series.provisionalRating ?? null}
+            onRate={(rating) =>
+              setSoFar.mutate(
+                { seriesId: series.id, rating },
+                { onSuccess: () => notify.ok(staticT`Rated ${rating}/10 so far`) },
+              )
+            }
+            onDismiss={() => dismissCheckpoint.mutate(series.id)}
+          />
+        ) : series.archiveHintEligible && series.archivedAt == null && canArchive && (
+          <ArchiveHint
+            onArchive={openArchiveDialog}
+            onDismiss={() => dismissArchiveHint.mutate(series.id)}
+          />
+        )}
+
+        {series.archivedAt != null && (
+          <ArchivedBanner
+            archivedAt={series.archivedAt}
+            archivedBy={archivedBy}
+            onRestore={canArchive ? restoreFromMenu : undefined}
+            restoring={restoreSeries.isPending}
+            onRemoveFiles={
+              canDelete && series.chapterFileCount > 0
+                ? () => {
+                    setBinRefused(null)
+                    setRemoveFilesModalOpen(true)
+                  }
+                : undefined
+            }
+          />
+        )}
+
         <Tabs.Panel value="details">
           <Stack className="series-detail-overview" gap="lg">
             {animeResume && (
@@ -1943,14 +2435,32 @@ function SeriesDetailBody() {
             )}
             <div className="series-split">
               <Panel className="series-detail-synopsis">
-                <Title order={2} size="h3" fz="var(--type-section)">
+                <PanelTitle order={2} icon={IconFileText}>
                   <Trans>Synopsis</Trans>
-                  {series.lockedFields.includes('overview') && <>{' '}<MetadataLock /></>}
-                </Title>
-                {series.overview ? (
-                    <Text size="sm" mt="sm" c="var(--ink-3)" style={{ lineHeight: 1.66, maxWidth: '100ch' }}>
-                      {cleanSynopsis(series.overview)}
-                    </Text>
+                  {series.lockedFields.includes('overview') && <MetadataLock />}
+                </PanelTitle>
+                {series.overview && isMobile ? (
+                    // About four lines on a phone, where the whole text pushed the sources and tags
+                    // several screens down. The panel beside Sources has the room on a laptop.
+                    <Spoiler
+                        mt="sm"
+                        maxHeight={96}
+                        showLabel={t`Show more`}
+                        hideLabel={t`Show less`}
+                        attributes={{ content: { 'aria-label': t`Synopsis` } }}
+                    >
+                      <Text size="sm" c="var(--ink-3)" style={{ lineHeight: 1.66 }}>
+                        {synopsis.body}
+                      </Text>
+                      {synopsisExtras}
+                    </Spoiler>
+                ) : series.overview ? (
+                    <>
+                      <Text size="sm" mt="sm" c="var(--ink-3)" style={{ lineHeight: 1.66, maxWidth: '75ch' }}>
+                        {synopsis.body}
+                      </Text>
+                      {synopsisExtras}
+                    </>
                 ) : (
                     <Text size="sm" mt="sm" c="var(--ink-3)">
                       <Trans>No synopsis yet.</Trans> <Trans>Refresh metadata to fetch one.</Trans>
@@ -1984,7 +2494,7 @@ function SeriesDetailBody() {
                         </Title>
                         {/* Genres carry no relevance weight, so they are one flat row rather than
                             buckets, on their own dot colour to read apart from the tags below. */}
-                        <div className="tag-chips" style={{ '--bucket': 'var(--info)' } as CSSProperties}>
+                        <div className="tag-chips" style={{ '--bucket': 'var(--neutral)' } as CSSProperties}>
                           {series.genres.map((g) => (
                               <span key={g} className="tag-chip">
                                 <i className="tag-dot" />
@@ -2020,7 +2530,7 @@ function SeriesDetailBody() {
                   )}
                   <Divider mt="sm" color="var(--hairline)" />
                   <SeriesTagsEditor seriesId={series.id} tagIds={series.tagIds} />
-                  {series.links.length > 0 && (
+                  {series.links && series.links.length > 0 && (
                       <div>
                         <Divider mb="sm" color="var(--hairline)" />
                         <Title order={3} size="h4" fz="var(--type-body)" mb={10}>
@@ -2065,22 +2575,86 @@ function SeriesDetailBody() {
                         })()}
                       </Alert>
                   )}
+                  <FigureStripReveal shown={delistedWithFileIds.length > 0}>
+                    {alertDelistedIds.length > 0 && (
+                      <Alert
+                          mb="md"
+                          color="var(--warn)"
+                          icon={<IconLinkOff size={18} />}
+                          title={plural(alertDelistedIds.length, {
+                            one: '# downloaded chapter is no longer listed',
+                            other: '# downloaded chapters are no longer listed',
+                          })}
+                      >
+                        <Text size="sm">
+                          <Trans>No source lists them any more. A source may have filed them here by mistake, or dropped them after a licence takedown, so check the files before reading them.</Trans>
+                        </Text>
+                        <Group gap="xs" mt="sm">
+                          <Button
+                              size="xs"
+                              variant="light"
+                              leftSection={<IconFilter size={16} />}
+                              onClick={() => {
+                                setChapterFilterPreference('delisted')
+                                changeTab('chapters')
+                              }}
+                          >
+                            <Trans>Show them</Trans>
+                          </Button>
+                          {canEditMetadata && (
+                              <Button
+                                  size="xs"
+                                  variant="subtle"
+                                  leftSection={<IconCheck size={16} />}
+                                  loading={clearDelisted.isPending && keepingFrom === 'alert'}
+                                  onClick={() => keepDelisted(alertDelistedIds, 'alert')}
+                              >
+                                <Trans>Keep them</Trans>
+                              </Button>
+                          )}
+                        </Group>
+                      </Alert>
+                    )}
+                  </FigureStripReveal>
                   {canManageSources && (
                     <>
                       <LanguageFallbackNotice seriesId={seriesId} />
-                      <SourceMappingsSection
-                          seriesId={seriesId}
-                          seriesTitle={series.title}
-                          matching={series.sourceMatchPending}
-                      />
+                      {/* The inner div is inert rather than every control inside getting a disabled
+                          prop: the section is shared, and the outer one stays hoverable so the reason
+                          can show. */}
+                      <Tooltip label={archivedReason} withArrow disabled={!archived} events={TOOLTIP_EVENTS}>
+                        <div style={archived ? { cursor: 'not-allowed' } : undefined}>
+                          <div inert={archived} style={archived ? { opacity: 0.55 } : undefined}>
+                            <SourceMappingsSection
+                                seriesId={seriesId}
+                                seriesTitle={series.title}
+                                altTitles={series.altTitles}
+                                matching={series.sourceMatchPending}
+                            />
+                          </div>
+                        </div>
+                      </Tooltip>
                       <Divider my="md" color="var(--hairline)" />
                     </>
                   )}
-                  <ReleaseOutlookSummary seriesId={seriesId} divided />
+                  <ReleaseOutlookSummary
+                      seriesId={seriesId}
+                      divided
+                      idleReason={
+                        sourceMappings && enabledMappings === 0
+                            ? 'noSource'
+                            : series.status === 'Completed' &&
+                                series.totalChapters != null &&
+                                lastChapterNumber != null &&
+                                lastChapterNumber >= series.totalChapters
+                              ? 'finished'
+                              : undefined
+                      }
+                  />
                   <Text size="xs" c="var(--ink-3)">
                     {scanning ? (
                         <Group gap={6} component="span" wrap="nowrap">
-                          <Loader size={10} />
+                          <Loader size={12} />
                           <Trans>Scanning for upgrades…</Trans>
                         </Group>
                     ) : series.lastUpgradeScan ? (
@@ -2113,12 +2687,17 @@ function SeriesDetailBody() {
                 </Panel>
                 <Panel className="series-detail-metadata-panel series-machine">
                   <Group justify="space-between" align="baseline" mb="sm" wrap="nowrap">
-                    <Title order={2} size="h3" fz="var(--type-subhead)">
+                    <PanelTitle order={2} icon={IconDatabase}>
                       <Trans>Metadata</Trans>
-                    </Title>
-                    <Anchor component="button" type="button" size="xs" c="var(--ink-3)" onClick={() => setMetadataHistoryOpen(true)}>
+                    </PanelTitle>
+                    <Button
+                      variant="default"
+                      size="compact-sm"
+                      leftSection={<IconHistory size={14} />}
+                      onClick={() => setMetadataHistoryOpen(true)}
+                    >
                       <Trans>History</Trans>
-                    </Anchor>
+                    </Button>
                   </Group>
                   <div className="series-records">
                     {series.originalTitle && (
@@ -2134,12 +2713,16 @@ function SeriesDetailBody() {
                           {altTitles.map(altTitleLabel).join(', ')}
                         </RecordRow>
                     )}
-                    {series.authorStory && (
+                    {series.authorStory && sameCreators(series.authorStory, series.authorArt) ? (
+                        <RecordRow label={t`Story and art`}>
+                          <CreatorNames role="author" names={series.authorStory} />
+                        </RecordRow>
+                    ) : series.authorStory && (
                         <RecordRow label={t`Story`}>
                           <CreatorNames role="author" names={series.authorStory} />
                         </RecordRow>
                     )}
-                    {series.authorArt && (
+                    {series.authorArt && !sameCreators(series.authorStory, series.authorArt) && (
                         <RecordRow label={t`Art`}>
                           <CreatorNames role="artist" names={series.authorArt} />
                         </RecordRow>
@@ -2149,7 +2732,7 @@ function SeriesDetailBody() {
                           <CreatorNames role="studio" names={series.publisher} />
                         </RecordRow>
                     )}
-                    {series.type && <RecordRow label={t`Type`}>{series.type}</RecordRow>}
+                    {series.type && <RecordRow label={t`Type`}>{renderLabel(TYPE_LABELS[series.type] ?? series.type)}</RecordRow>}
                     {series.year && <RecordRow label={t`Year`}>{series.year}</RecordRow>}
                     <RecordRow label={t`Status`}>
                       {renderLabel(status.label)}
@@ -2184,7 +2767,7 @@ function SeriesDetailBody() {
                     )}
                     {series.rootFolderPath && (
                         <RecordRow label={t`Folder`}>
-                          <MonoValue value={series.rootFolderPath} copy c="var(--ink-3)" />
+                          <MonoValue value={series.rootFolderPath} copy wrap c="var(--ink-3)" />
                         </RecordRow>
                     )}
                   </div>
@@ -2352,27 +2935,46 @@ function SeriesDetailBody() {
         <Tabs.Panel value="chapters">
           <Stack className="series-detail-chapters" gap="lg">
             <div className="series-detail-chapter-head" data-sticky={selectMode ? undefined : true}>
-              <Group
-                  className="series-detail-chapter-toolbar"
-                  justify="space-between"
-                  wrap="wrap"
-                  gap="sm"
-              >
-                <Group gap="xs" align="baseline">
-                  <Title order={2} size="h3"><Trans>Chapters</Trans></Title>
-                  {chapters && (
-                      <Text size="sm" c="var(--ink-3)" className="tnum">
-                        {progress.have}/{progress.total}
-                      </Text>
-                  )}
-                  {chapters && readTracking && progress.have > 0 && (
-                      <Badge size="sm" variant="light" color="var(--ok)" className="tnum">
-                        <Trans>{readFilterCount} read</Trans>
-                      </Badge>
+              <Stack className="series-detail-chapter-toolbar" gap="sm">
+                <Group justify="space-between" wrap="nowrap" align="flex-start" gap="sm">
+                  <Group gap="xs" align="baseline" style={{ flex: 1, minWidth: 0 }}>
+                    <Title order={2} size="h3"><Trans>Chapters</Trans></Title>
+                    {chapters && (
+                        <Text size="sm" c="var(--ink-3)" className="tnum">
+                          <Trans>{chaptersHave}/{chaptersCounted} downloaded</Trans>
+                        </Text>
+                    )}
+                    {chapters && readTracking && progress.have > 0 && (
+                        <Badge size="sm" variant="light" color="var(--brand)" className="tnum">
+                          <Trans>{readFilterCount} read</Trans>
+                        </Badge>
+                    )}
+                  </Group>
+                  {chapters && chapters.length > 0 && !selectMode && (
+                      isMobile ? (
+                          <ActionIcon
+                              size="input-xs"
+                              variant="default"
+                              aria-label={t`Select`}
+                              onClick={() => setSelectMode(true)}
+                          >
+                            <IconListCheck size={16} />
+                          </ActionIcon>
+                      ) : (
+                          <Button
+                              size="xs"
+                              variant="default"
+                              leftSection={<IconListCheck size={16} />}
+                              onClick={() => setSelectMode(true)}
+                          >
+                            <Trans>Select</Trans>
+                          </Button>
+                      )
                   )}
                 </Group>
                 {chapters && chapters.length > 0 && (
-                    <Group gap="xs" wrap="wrap">
+                    // One row on a phone: the filter takes what the fixed-width controls leave.
+                    <Group gap="xs" wrap={isMobile ? 'nowrap' : 'wrap'}>
                       {isMobile ? (
                           <Select
                               size="xs"
@@ -2381,16 +2983,17 @@ function SeriesDetailBody() {
                               value={chapterFilter}
                               onChange={(value) => value && setChapterFilter(value)}
                               allowDeselect={false}
-                              w={150}
+                              style={{ flex: 1, minWidth: 0 }}
                           />
                       ) : (
-                          <SegmentedControl
+                          <div
+                              className="chapter-filter-chips"
+                              role="radiogroup"
                               aria-label={t`Filter chapters`}
-                              size="xs"
-                              value={chapterFilter}
-                              onChange={setChapterFilter}
-                              data={chapterFilterData}
-                          />
+                              onKeyDown={onRovingKeyDown}
+                          >
+                            {chapterFilterChips}
+                          </div>
                       )}
                       <Tooltip label={chapterSort === 'asc' ? t`Oldest first` : t`Newest first`} withArrow>
                         <ActionIcon
@@ -2411,25 +3014,38 @@ function SeriesDetailBody() {
                           value={chapterPageSizePreference}
                           onChange={setChapterPageSize}
                           allowDeselect={false}
-                          w={isMobile ? 100 : 108}
+                          className="page-size-select"
+                          style={{ '--label-ch': Math.max(...chapterPageSizeOptions.map((o) => o.label.length)) }}
                       />
-                      {!selectMode && (
-                          <Button
-                              size="xs"
-                              variant="default"
-                              leftSection={<IconListCheck size={14} />}
-                              onClick={() => setSelectMode(true)}
-                          >
-                            <Trans>Select</Trans>
-                          </Button>
-                      )}
                     </Group>
                 )}
-              </Group>
+              </Stack>
 
               {!isMobile && chapterSearchInput}
             </div>
             {isMobile && chapterSearchInput}
+
+            {!selectMode && fileMissingFilterCount > 0 && (
+                <Paper className="series-detail-chapter-hint" withBorder p="xs" radius="lg" role="status">
+                  <Group gap="sm" wrap="wrap" justify="space-between">
+                    <Group gap="xs" wrap="nowrap" align="flex-start" style={{ flex: '1 1 20rem', minWidth: 0 }}>
+                      <IconAlertTriangle size={16} style={{ flexShrink: 0, marginTop: 2, color: 'var(--warn)' }} />
+                      <Text size="sm" c="var(--ink-2)" className="tnum">
+                        <Plural
+                            value={fileMissingFilterCount}
+                            one="# chapter has no file on disk"
+                            other="# chapters have no file on disk"
+                        />
+                      </Text>
+                    </Group>
+                    {canEditMetadata && (
+                        <Button size="xs" variant="default" leftSection={<IconWand size={16} />} onClick={() => setRelinkOpen(true)}>
+                          <Trans>Relink files</Trans>
+                        </Button>
+                    )}
+                  </Group>
+                </Paper>
+            )}
 
             {/* Two closed issues came from people who had a file on disk and could not find how to
                 tell Maki which chapters it holds. Point at it from the tab they were looking at. */}
@@ -2437,7 +3053,7 @@ function SeriesDetailBody() {
                 <Paper className="series-detail-chapter-hint" withBorder p="xs" radius="lg">
                   <Group justify="space-between" wrap="wrap" gap="xs">
                     <Group gap="xs" wrap="nowrap" align="flex-start" style={{ flex: 1, minWidth: 240 }}>
-                      <IconLink size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+                      <IconLink size={16} style={{ flexShrink: 0, marginTop: 2, color: 'var(--warn)' }} />
                       <Text size="sm" c="var(--ink-2)">
                         <Plural
                             value={unlinkedFilesOnDisk}
@@ -2448,10 +3064,10 @@ function SeriesDetailBody() {
                       </Text>
                     </Group>
                     <Group gap="xs">
-                      <Button size="xs" variant="light" leftSection={<IconWand size={14} />} onClick={() => setRelinkOpen(true)}>
+                      <Button size="xs" variant="light" leftSection={<IconWand size={16} />} onClick={() => setRelinkOpen(true)}>
                         <Trans>Relink files</Trans>
                       </Button>
-                      <Button size="xs" variant="subtle" leftSection={<IconLink size={14} />} onClick={() => changeTab('files')}>
+                      <Button size="xs" variant="subtle" leftSection={<IconLink size={16} />} onClick={() => changeTab('files')}>
                         <Trans>Link by hand</Trans>
                       </Button>
                     </Group>
@@ -2467,12 +3083,15 @@ function SeriesDetailBody() {
                 <Paper className="series-detail-chapter-selection" withBorder p="xs" radius="lg">
                   <Group justify="space-between" wrap="wrap" gap="xs">
                     <Group gap="xs">
+                      <ActionIcon hiddenFrom="sm" variant="default" onClick={exitSelectMode} aria-label={t`Done`}>
+                        <IconX size={16} />
+                      </ActionIcon>
                       <Text size="sm" c="var(--ink-3)" className="tnum">
                         <Trans>{selectedCount} selected</Trans>
                       </Text>
                       <Menu shadow="md" position="bottom-start" withinPortal>
                         <Menu.Target>
-                          <Button size="xs" variant="subtle" rightSection={<IconChevronDown size={14} />}>
+                          <Button size="xs" variant="subtle" rightSection={<IconChevronDown size={16} />}>
                             <Trans>Select all</Trans>
                           </Button>
                         </Menu.Target>
@@ -2516,152 +3135,103 @@ function SeriesDetailBody() {
                       </Text>
                     </Group>
                     <Group gap="xs">
-                      {canDownload && (
+                      {chapterPrimaryActions.map((a) => {
+                        const button = (
                           <Button
+                              key={a.key}
+                              visibleFrom="sm"
                               size="xs"
                               variant="light"
-                              leftSection={<IconDownload size={15} />}
+                              leftSection={a.icon}
                               disabled={selected.size === 0}
-                              loading={downloadChapters.isPending}
-                              onClick={() =>
-                                  downloadChapters.mutate([...selected], {
-                                    onSuccess: (r) =>
-                                        r.queued > 0
-                                            ? notify.ok(
-                                                plural(r.queued, { one: 'Queued # chapter', other: 'Queued # chapters' }),
-                                            )
-                                            : notify.info(
-                                                r.error ?? staticT`Nothing to queue, those chapters are already on disk`,
-                                            ),
-                                  })
-                              }
+                              data-disabled={a.disabled || undefined}
+                              aria-disabled={a.disabled || undefined}
+                              loading={a.loading}
+                              onClick={a.run}
                           >
-                            <Trans>Download</Trans>
+                            {a.label}
                           </Button>
-                      )}
-                      {canEditMetadata && (
-                          <>
-                          <Button
-                              size="xs"
-                              variant="light"
-                              leftSection={<IconEye size={15} />}
-                              disabled={selected.size === 0}
-                              loading={setChaptersWanted.isPending && setChaptersWanted.variables?.wanted === true}
-                              onClick={() => applyWanted([...selected], true)}
-                          >
-                            <Trans>Want</Trans>
-                          </Button>
-                          <Button
-                              size="xs"
-                              variant="light"
-                              color="var(--neutral)"
-                              leftSection={<IconEyeOff size={15} />}
-                              disabled={selected.size === 0}
-                              loading={setChaptersWanted.isPending && setChaptersWanted.variables?.wanted === false}
-                              onClick={() => applyWanted([...selected], false)}
-                          >
-                            <Trans>Don't want</Trans>
-                          </Button>
-                          </>
-                      )}
-                      {readTracking && (
-                          <>
-                            <Button
-                                size="xs"
-                                variant="light"
-                                color="var(--watched)"
-                                leftSection={<IconDeviceTv size={15} />}
-                                disabled={selected.size === 0}
-                                loading={setChaptersState.isPending && setChaptersState.variables?.state === 'watched'}
-                                onClick={() => applyReadState([...selected], 'watched')}
-                            >
-                              <Trans>Mark watched</Trans>
-                            </Button>
-                            <Button
-                                size="xs"
-                                variant="light"
-                                color="var(--ok)"
-                                leftSection={<IconEyeCheck size={15} />}
-                                disabled={selected.size === 0}
-                                loading={setChaptersState.isPending && setChaptersState.variables?.state === 'read'}
-                                onClick={() => applyReadState([...selected], 'read')}
-                            >
-                              <Trans>Mark read</Trans>
-                            </Button>
-                            <Button
-                                size="xs"
-                                variant="light"
-                                color="var(--neutral)"
-                                leftSection={<IconEyeOff size={15} />}
-                                disabled={selected.size === 0}
-                                loading={setChaptersState.isPending && setChaptersState.variables?.state === 'unread'}
-                                onClick={() => applyReadState([...selected], 'unread')}
-                            >
-                              <Trans>Mark unread</Trans>
-                            </Button>
-                          </>
-                      )}
-                      {canEditMetadata && (
-                          <>
-                          <Button
-                              size="xs"
-                              variant="light"
-                              leftSection={<IconLink size={15} />}
-                              disabled={selected.size === 0}
-                              onClick={() => setLinkChapterIds([...selected])}
-                          >
-                            <Trans>Link to file</Trans>
-                          </Button>
-                          <Button
-                              size="xs"
-                              variant="light"
-                              color="var(--warn)"
-                              leftSection={<IconLinkOff size={15} />}
-                              disabled={selected.size === 0}
-                              loading={unlinkChapters.isPending}
-                              onClick={() =>
-                                  unlinkChapters.mutate([...selected], {
-                                    onSuccess: (r) => {
-                                      notify.ok(
-                                          plural(r.unlinked, { one: 'Unlinked # chapter', other: 'Unlinked # chapters' }),
-                                      )
-                                      exitSelectMode()
-                                    },
-                                  })
-                              }
-                          >
-                            <Trans>Unlink</Trans>
-                          </Button>
-                          </>
+                        )
+                        return a.key === 'download' ? (
+                            <Tooltip key={a.key} label={archivedReason} withArrow disabled={!archived} events={TOOLTIP_EVENTS}>
+                              {button}
+                            </Tooltip>
+                        ) : (
+                            button
+                        )
+                      })}
+                      {(chapterPrimaryActions.length > 0 || chapterMoreGroups.length > 0) && (
+                          <Menu position="bottom-end" withinPortal>
+                            <Menu.Target>
+                              <Button
+                                  size="xs"
+                                  variant="default"
+                                  rightSection={<IconChevronDown size={16} />}
+                                  disabled={selected.size === 0}
+                                  loading={chapterMoreBusy}
+                                  className={chapterMoreGroups.length === 0 ? 'library-bulk-more-phone' : undefined}
+                              >
+                                <Text span inherit visibleFrom="sm">
+                                  <Trans>More</Trans>
+                                </Text>
+                                <Text span inherit hiddenFrom="sm">
+                                  <Trans>Actions</Trans>
+                                </Text>
+                              </Button>
+                            </Menu.Target>
+                            <Menu.Dropdown>
+                              {chapterPrimaryActions.map((a) => (
+                                  <Menu.Item key={a.key} hiddenFrom="sm" leftSection={a.icon} disabled={a.disabled} onClick={a.run}>
+                                    {a.label}
+                                  </Menu.Item>
+                              ))}
+                              {chapterMoreGroups.map((group, i) => (
+                                  <Fragment key={group[0].key}>
+                                    {(i > 0 || chapterPrimaryActions.length > 0) && (
+                                        <Menu.Divider hiddenFrom={i === 0 ? 'sm' : undefined} />
+                                    )}
+                                    {group.map((a) => (
+                                        <Menu.Item key={a.key} leftSection={a.icon} onClick={a.run}>
+                                          {a.label}
+                                        </Menu.Item>
+                                    ))}
+                                  </Fragment>
+                              ))}
+                            </Menu.Dropdown>
+                          </Menu>
                       )}
                       {canDelete && (
                           <>
-                            <Button
-                                size="xs"
-                                variant="light"
-                                color="var(--danger)"
-                                leftSection={<IconTrash size={15} />}
-                                disabled={selected.size === 0}
-                                onClick={() => setDeleteFileIds([...selected])}
-                            >
-                              <Trans>Delete files</Trans>
-                            </Button>
-                            <Button
-                                size="xs"
-                                variant="subtle"
-                                color="var(--danger)"
-                                leftSection={<IconRowRemove size={15} />}
-                                disabled={selected.size === 0}
-                                onClick={() => setDeleteChaptersModalOpen(true)}
-                            >
-                              <Trans>Remove chapters</Trans>
-                            </Button>
+                            <Divider orientation="vertical" className="library-bulk-divider" />
+                            <Menu position="bottom-end" withinPortal>
+                              <Menu.Target>
+                                <Button
+                                    size="xs"
+                                    variant="light"
+                                    color="var(--danger)"
+                                    leftSection={<IconTrash size={16} />}
+                                    rightSection={<IconChevronDown size={16} />}
+                                    disabled={selected.size === 0}
+                                >
+                                  <Trans>Delete</Trans>
+                                </Button>
+                              </Menu.Target>
+                              <Menu.Dropdown>
+                                <Menu.Item leftSection={<IconTrash size={16} />} onClick={() => setDeleteFileIds([...selected])}>
+                                  <Trans>Delete files</Trans>
+                                </Menu.Item>
+                                <Menu.Item leftSection={<IconRowRemove size={16} />} onClick={() => setDeleteChaptersModalOpen(true)}>
+                                  <Trans>Remove chapters</Trans>
+                                </Menu.Item>
+                              </Menu.Dropdown>
+                            </Menu>
                           </>
                       )}
                       <Button
+                          visibleFrom="sm"
                           size="xs"
                           variant="default"
-                          leftSection={<IconX size={15} />}
+                          leftSection={<IconX size={16} />}
                           onClick={exitSelectMode}
                       >
                         <Trans>Done</Trans>
@@ -2671,11 +3241,14 @@ function SeriesDetailBody() {
                 </Paper>
             )}
 
-            <Modal
+            <ConfirmDialog
                 opened={deleteChaptersModalOpen}
                 onClose={closeRemoveChapters}
                 title={t`Remove chapters?`}
-                centered
+                confirmLabel={<Trans>Remove chapters</Trans>}
+                onConfirm={() => removeChapters()}
+                loading={deleteChapters.isPending}
+                confirmDisabled={binRefused === 'chapters'}
             >
               <Stack gap="md">
                 <Text size="sm" c="var(--ink-3)">
@@ -2692,34 +3265,32 @@ function SeriesDetailBody() {
                   <Trans>Use this to clean up chapters pulled in by a wrong source match.</Trans>{' '}
                   <Trans>Fix or remove the source mapping first, or a refresh will bring them right back.</Trans>
                 </Text>
+                {selectedNoteCount > 0 && (
+                  <Text size="sm">
+                    <Plural
+                      value={selectedNoteCount}
+                      one="# note on the selected chapters will be deleted."
+                      other="# notes on the selected chapters will be deleted."
+                    />
+                  </Text>
+                )}
                 <Text size="sm" c="var(--danger)">
                   <Trans>Removed chapter rows and their read history cannot be restored.</Trans>
                 </Text>
-                <Group justify="flex-end">
-                  <Button variant="default" onClick={closeRemoveChapters}>
-                    <Trans>Cancel</Trans>
-                  </Button>
-                  <Button
-                      color="var(--danger-fill)"
-                      leftSection={<IconTrash size={16} />}
-                      loading={deleteChapters.isPending}
-                      disabled={binRefused === 'chapters'}
-                      onClick={() => removeChapters()}
-                  >
-                    <Trans>Remove</Trans>
-                  </Button>
-                </Group>
                 {binRefused === 'chapters' && (
                     <PermanentDeleteFallback loading={deleteChapters.isPending} onConfirm={() => removeChapters(true)} />
                 )}
               </Stack>
-            </Modal>
+            </ConfirmDialog>
 
-            <Modal
+            <ConfirmDialog
                 opened={deleteFileIds !== null}
                 onClose={closeDeleteFiles}
                 title={t`Delete files?`}
-                centered
+                confirmLabel={<Trans>Delete files</Trans>}
+                onConfirm={() => deleteFilesOf()}
+                loading={deleteChapterFiles.isPending}
+                confirmDisabled={!deleteFilesPlan || deleteFilesPlan.files === 0 || binRefused === 'files'}
             >
               <Stack gap="md">
                 {deleteFilesPlan && deleteFilesPlan.files === 0 ? (
@@ -2751,25 +3322,11 @@ function SeriesDetailBody() {
                       />
                     </Text>
                 )}
-                <Group justify="flex-end">
-                  <Button variant="default" onClick={closeDeleteFiles}>
-                    <Trans>Cancel</Trans>
-                  </Button>
-                  <Button
-                      color="var(--danger-fill)"
-                      leftSection={<IconTrash size={16} />}
-                      disabled={!deleteFilesPlan || deleteFilesPlan.files === 0 || binRefused === 'files'}
-                      loading={deleteChapterFiles.isPending}
-                      onClick={() => deleteFilesOf()}
-                  >
-                    <Trans>Delete files</Trans>
-                  </Button>
-                </Group>
                 {binRefused === 'files' && (
                     <PermanentDeleteFallback loading={deleteChapterFiles.isPending} onConfirm={() => deleteFilesOf(true)} />
                 )}
               </Stack>
-            </Modal>
+            </ConfirmDialog>
 
             <RelinkFilesModal seriesId={seriesId} opened={relinkOpen} onClose={() => setRelinkOpen(false)} />
 
@@ -2808,12 +3365,15 @@ function SeriesDetailBody() {
                         <Table
                             className="chapter-table"
                             highlightOnHover
-                            verticalSpacing="xs"
+                            // 6px around the 32px row buttons lands a one-line row on the cells' 48px floor.
+                            verticalSpacing={6}
                             aria-busy={chapterRowsLoading || undefined}
                         >
                           <Table.Thead>
                             <Table.Tr>
-                              <Table.Th w={CHAPTER_WANTED_COLUMN_WIDTH}><Trans>Wanted</Trans></Table.Th>
+                              <Table.Th w={CHAPTER_WANTED_COLUMN_WIDTH}>
+                                <HintLabel tip={wantedColumnTip} maw={280}><Trans>Wanted</Trans></HintLabel>
+                              </Table.Th>
                               <Table.Th w={chapterColumnWidths.chapter}>
                                 <Trans>Chapter</Trans>
                                 {!chapterRowsAsList && (
@@ -2874,6 +3434,7 @@ function SeriesDetailBody() {
                                           key={c.id}
                                           chapter={c}
                                           progress={readProgress.get(c.id)}
+                                          noteCounts={noteCounts.get(c.id)}
                                           queueItem={queueByChapterId.get(c.id)}
                                           selectMode={selectMode}
                                           selected={selectMode && selected.has(c.id)}
@@ -2885,6 +3446,7 @@ function SeriesDetailBody() {
                                           canDownload={canDownload}
                                           canDelete={canDelete}
                                           canFindBetterCopy={enabledMappings > 1}
+                                          sourceToolsDisabledReason={archivedReason}
                                           canSaveOffline={canSaveOffline}
                                           offline={offlineRecords.get(c.id)}
                                           offlineSaving={offlineProgress.get(c.id)}
@@ -2917,7 +3479,7 @@ function SeriesDetailBody() {
                                 style={{ top: line.top, height: line.height, left: line.left }}
                                 data-open-start={line.openStart ? '' : undefined}
                                 data-open-ended={line.openEnded ? '' : undefined}
-                                title={t`${lineLabel} · click to collapse`}
+                                title={t`${lineLabel}. Click to collapse.`}
                                 aria-label={t`Collapse ${lineLabel}`}
                                 onClick={() => toggleSpanFold(line.key)}
                             />
@@ -2929,7 +3491,7 @@ function SeriesDetailBody() {
                   {chapterPageCount > 1 && (
                       <Group justify="space-between" gap="xs" wrap="wrap">
                         <Text size="xs" c="var(--ink-3)" className="tnum">
-                          <Trans>Chapters {currentPageLabel} · {visibleAllCount} matching</Trans>
+                          <Trans>Chapters {currentPageLabel} of {visibleAllCount} matching</Trans>
                         </Text>
                         <Pagination
                             size="sm"
@@ -2961,6 +3523,48 @@ function SeriesDetailBody() {
         </Tabs.Panel>
 
         {/* This action lives in the hero, so its dialog must not be deactivated with any tab panel. */}
+        <ArchiveSeriesDialog
+          opened={archiveModalOpen}
+          onClose={() => {
+            setArchiveModalOpen(false)
+            setBinRefused(null)
+          }}
+          title={seriesTitle}
+          seriesId={series.id}
+          removeFiles={archiveRemoveFiles}
+          onRemoveFilesChange={setArchiveRemoveFiles}
+          canRemoveFiles={canDelete}
+          loading={archiveSeries.isPending}
+          onConfirm={() => archiveCurrent()}
+          onConfirmPermanent={binRefused === 'archive' ? () => archiveCurrent(true) : undefined}
+          leavingRating={
+            ratesProvisionally(series)
+              ? { value: leavingRating, soFar: series.provisionalRating ?? null, onChange: setLeavingRating }
+              : undefined
+          }
+        />
+
+        <RemoveArchivedFilesDialog
+          opened={removeFilesModalOpen}
+          onClose={() => {
+            setRemoveFilesModalOpen(false)
+            setBinRefused(null)
+          }}
+          title={t`Remove the files of ${seriesTitle}?`}
+          loading={removeArchivedFiles.isPending}
+          onConfirm={() => removeArchivedSeriesFiles()}
+          onConfirmPermanent={binRefused === 'archiveFiles' ? () => removeArchivedSeriesFiles(true) : undefined}
+        />
+
+        <RestoreSeriesDialog
+          opened={restoreModalOpen}
+          onClose={() => setRestoreModalOpen(false)}
+          seriesId={series.id}
+          canDownload={canDownload}
+          loading={restoreSeries.isPending}
+          onRestore={restoreArchived}
+        />
+
         <RemoveSeriesDialog
           opened={deleteSeriesModalOpen}
           onClose={() => {
@@ -2976,6 +3580,15 @@ function SeriesDetailBody() {
         >
           <Trans>This removes "{seriesTitle}" and its chapters from Maki.</Trans>
         </RemoveSeriesDialog>
+
+        {conversionHistory && (
+          <UndoConversionModal
+            opened={undoConversionOpen}
+            onClose={() => setUndoConversionOpen(false)}
+            seriesId={seriesId}
+            history={conversionHistory}
+          />
+        )}
 
         <Modal
             opened={requestModalOpen}
@@ -3024,6 +3637,18 @@ function SeriesDetailBody() {
             />
         )}
 
+        {notesPanel && notesChapter && (
+            <NotesPanel
+                key={notesChapter.id}
+                opened={notesPanel.open}
+                onClose={() => setNotesPanel({ ...notesPanel, open: false })}
+                chapterId={notesChapter.id}
+                seriesId={seriesId}
+                chapterLabel={chapterLabel(notesChapter)}
+                spoilerGuard={!(notesChapterRead?.read || notesChapterRead?.watched)}
+            />
+        )}
+
         <UpgradeNowResultModal
             opened={upgradeNowModalOpen}
             result={upgradeNowResult}
@@ -3057,9 +3682,9 @@ function ReadTimeEstimateText({ estimate }: { estimate: ReadTimeEstimate }) {
         </Text>
         <Text size="xs" c="var(--ink-3)">
           {style === 'scrolling' ? (
-              <Trans>Scrolling pace · {chaptersLeft} · {basis}</Trans>
+              <Trans>{chaptersLeft} at your scrolling pace, {basis}.</Trans>
           ) : (
-              <Trans>Paged pace · {chaptersLeft} · {basis}</Trans>
+              <Trans>{chaptersLeft} at your paged pace, {basis}.</Trans>
           )}
         </Text>
       </Stack>
@@ -3067,6 +3692,15 @@ function ReadTimeEstimateText({ estimate }: { estimate: ReadTimeEstimate }) {
 }
 
 /** A comma-separated credit, each name linking to that creator's page. */
+const creatorKey = (names: string | null | undefined) =>
+  (names ?? '').split(',').map((n) => n.trim().toLowerCase()).filter(Boolean).sort().join('|')
+
+/** Story and art credit the same people, so the Metadata panel shows one row for both. */
+function sameCreators(story: string | null | undefined, art: string | null | undefined) {
+  const key = creatorKey(story)
+  return key !== '' && key === creatorKey(art)
+}
+
 function CreatorNames({
                         role,
                         names,

@@ -24,7 +24,7 @@ import {
   IconFolder,
   IconFolderPlus,
   IconTrash,
-} from '@tabler/icons-react'
+} from '../lib/icons'
 import { useNavigate } from 'react-router-dom'
 import { Trans, useLingui } from '@lingui/react/macro'
 import { plural } from '@lingui/core/macro'
@@ -54,10 +54,12 @@ import {
 } from '../api/hooks'
 import { languageName } from '../api/titles'
 import { formatBytes } from '../format'
+import { NO_TRANSITION } from '../lib/motion'
 import { useLanguageChoice } from '../i18n-context'
 import { AppearancePicker } from './AppearancePicker'
 import { ConnectionForm, type ConnectionFields } from './ConnectionSettingsCard'
 import { useDownloadClientFields } from './settings/downloadClientFields'
+import { FolderBrowserModal } from './settings/FolderBrowserModal'
 import { IndexerForm } from './settings/IndexerForm'
 import { ContentRatingCards } from './ContentRatingCards'
 import { IconBrandMark } from './IconBrandMark'
@@ -112,7 +114,6 @@ function WelcomeStep() {
     <>
       <SettingRow
         label={<Trans>Language</Trans>}
-        description={<Trans>The language of Maki's interface, on every device you sign in on.</Trans>}
         control={
           <Select
             aria-label={t`Language`}
@@ -131,7 +132,7 @@ function WelcomeStep() {
       />
       <SettingRow
         label={<Trans>Appearance</Trans>}
-        description={<Trans>A background and an accent colour. The background can also be the light theme or whatever your system uses. Remembered on this device.</Trans>}
+        description={<Trans>Saved on this device only.</Trans>}
       >
         <AppearancePicker />
       </SettingRow>
@@ -161,6 +162,7 @@ function useLibraryPatch() {
 function LibraryStep() {
   const { t } = useLingui()
   const [newPath, setNewPath] = useState('')
+  const [browsing, setBrowsing] = useState(false)
   const { data: rootFolders } = useRootFolders()
   const addFolder = useAddRootFolder()
   const deleteFolder = useDeleteRootFolder()
@@ -178,10 +180,7 @@ function LibraryStep() {
       <SettingRow
         label={<Trans>Library folders</Trans>}
         description={
-          <Trans>
-            Where your manga is stored, or should be. Maki creates one folder per series inside it.
-            If you use Kavita, point it at the same place.
-          </Trans>
+          <Trans>Where your manga is stored. If you use Kavita, point it at the same place.</Trans>
         }
       >
         <Stack gap="xs">
@@ -211,7 +210,7 @@ function LibraryStep() {
               </div>
             )
           })}
-          <Group gap="xs" wrap="nowrap">
+          <Group gap="xs">
             <TextInput
               aria-label={t`Folder path`}
               placeholder={t`C:\\Manga or /library`}
@@ -219,14 +218,24 @@ function LibraryStep() {
               value={newPath}
               onChange={(e) => setNewPath(e.currentTarget.value)}
               onKeyDown={(e) => e.key === 'Enter' && add()}
-              style={{ flex: 1 }}
+              style={{ flex: '1 1 16rem' }}
             />
+            <Button variant="default" onClick={() => setBrowsing(true)}>
+              <Trans>Browse</Trans>
+            </Button>
             <Button onClick={add} loading={addFolder.isPending} disabled={!newPath.trim()}>
               <Trans>Add folder</Trans>
             </Button>
           </Group>
         </Stack>
       </SettingRow>
+
+      <FolderBrowserModal
+        opened={browsing}
+        onClose={() => setBrowsing(false)}
+        onSelect={setNewPath}
+        initialPath={newPath}
+      />
 
       <ConfirmDialog
         opened={deleting !== null}
@@ -254,7 +263,6 @@ function LibraryStep() {
 
       <SettingRow
         label={<Trans>Existing folders on import</Trans>}
-        description={<Trans>What happens to a series folder you already have when you import it into Maki.</Trans>}
       >
         <Radio.Group
           aria-label={t`Existing folders on import`}
@@ -308,10 +316,7 @@ function LibraryStep() {
       <SettingRow
         label={<Trans>Write ComicInfo.xml into imported files</Trans>}
         description={
-          <Trans>
-            Helps Kavita and other readers group and name chapters. Off leaves torrent grabs and
-            manual imports untouched. Maki's own downloads always get one.
-          </Trans>
+          <Trans>Helps Kavita and other readers group and name chapters.</Trans>
         }
         control={
           <Switch
@@ -323,7 +328,6 @@ function LibraryStep() {
       />
       <SettingRow
         label={<Trans>Save a cover.jpg into each series folder</Trans>}
-        description={<Trans>For readers like Komga and Kavita that pick up a poster from the folder.</Trans>}
         control={
           <Switch
             aria-label={t`Save a cover.jpg into each series folder`}
@@ -349,10 +353,7 @@ function DiscoveryStep() {
       <SettingRow
         label={<Trans>Local MangaBaka database</Trans>}
         description={
-          <Trans>
-            Search, adding series, imports and Discover all read from it. About a 350 MB download and
-            3.5 GB on disk, refreshed nightly. Setup finishes once it is in.
-          </Trans>
+          <Trans>About a 350 MB download. Setup finishes once it is in.</Trans>
         }
       >
         <MetadataDumpStatus metadata={metadata} progress={progress} />
@@ -361,10 +362,7 @@ function DiscoveryStep() {
       <SettingRow
         label={<Trans>Recommendations and search by description</Trans>}
         description={
-          <Trans>
-            A small local model lets Discover recommend by feel and lets you search for a plot
-            rather than a title. Its index downloads prebuilt, so your machine skips the heavy work.
-          </Trans>
+          <Trans>Lets Discover recommend by feel and search by plot.</Trans>
         }
       >
         <RecommendationModelSwitch
@@ -376,7 +374,7 @@ function DiscoveryStep() {
 
       <SettingRow
         label={<Trans>Content rating</Trans>}
-        description={<Trans>The most explicit rating shown in search, Discover and recommendations. Everything up to it is allowed.</Trans>}
+        description={<Trans>The most explicit rating shown outside your own library.</Trans>}
       >
         <ContentRatingCards
           value={discover?.maxContentRating ?? 'erotica'}
@@ -409,10 +407,7 @@ function DownloadsStep() {
       <SettingRow
         label={<Trans>Languages to download</Trans>}
         description={
-          <Trans>
-            Most preferred first. Maki matches new series to sources that publish your top language
-            and skips sources that publish none of these. Drag to reorder.
-          </Trans>
+          <Trans>Most preferred first.</Trans>
         }
       >
         {order && disabled && (
@@ -448,10 +443,7 @@ function DownloadsStep() {
       <SettingRow
         label={<Trans>Skip specials on new series</Trans>}
         description={
-          <Trans>
-            Specials are decimal chapters like 10.5 or 12.1. When on, they stay listed on newly
-            added series but never download.
-          </Trans>
+          <Trans>Decimal chapters like 10.5 stay listed but are never downloaded.</Trans>
         }
         control={
           <Switch
@@ -480,29 +472,29 @@ function useServices(): ServiceSpec[] {
     {
       name: 'flaresolverr',
       title: 'FlareSolverr',
-      description: t`Gets past Cloudflare for sources like MangaFire. Without it those sources are skipped.`,
+      description: t`Gets past Cloudflare for the sources that need it.`,
       fields: [{ key: 'url', label: t`URL`, placeholder: 'http://localhost:8191' }],
     },
     {
       name: 'indexer',
       title: t`Indexer`,
-      description: t`Searches your indexers for manga releases to download as torrents. Works through Prowlarr or Jackett.`,
+      description: t`Prowlarr or Jackett, for torrent releases.`,
     },
     {
       name: 'downloadclient',
       title: t`Download client`,
-      description: t`Downloads what the indexer finds. Finished torrents import into the library on their own. Fill the path mapping only if the client sees paths Maki can't, as in Docker.`,
+      description: t`Downloads what the indexer finds.`,
       fields: downloadClientFields,
     },
     {
       name: 'kavita',
       title: 'Kavita',
-      description: t`Maki asks Kavita to scan a series after its files change and sends it posters, links and status. The API key is under User Settings, 3rd Party Clients. Fill the path mapping only if Kavita sees the library under another path.`,
+      description: t`The API key is under User Settings, 3rd Party Clients in Kavita.`,
       fields: [
         { key: 'url', label: t`URL`, placeholder: 'http://localhost:5000' },
         { key: 'apiKey', label: t`API key`, secret: true },
-        { key: 'pathMapFrom', label: t`Path mapping - Maki side`, placeholder: t`C:\\Manga (optional)` },
-        { key: 'pathMapTo', label: t`Path mapping - Kavita side`, placeholder: t`/manga (optional)` },
+        { key: 'pathMapFrom', label: t`Path mapping, Maki side`, placeholder: t`C:\\Manga (optional)` },
+        { key: 'pathMapTo', label: t`Path mapping, Kavita side`, placeholder: t`/manga (optional)` },
       ],
     },
   ]
@@ -576,7 +568,7 @@ function SummaryLine({ tone, children, action }: { tone: Tone; children: ReactNo
   return (
     <div className="setup-summary-line" data-tone={tone}>
       <span className="setup-summary-icon">
-        {tone === 'warn' ? <IconAlertTriangle size={14} /> : <IconCheck size={14} />}
+        {tone === 'warn' ? <IconAlertTriangle size={16} /> : <IconCheck size={16} />}
       </span>
       <Text className="setup-summary-text">{children}</Text>
       {action}
@@ -824,7 +816,7 @@ function GuideRail({
                   aria-current={current ? 'step' : undefined}
                   onClick={() => onSelect(i)}
                 >
-                  <span className="setup-step-index">{done ? <IconCheck size={13} stroke={2.6} /> : i + 1}</span>
+                  <span className="setup-step-index">{done ? <IconCheck size={13} /> : i + 1}</span>
                   <span className="setup-step-text">
                     <span className="setup-step-label">{step.label}</span>
                     {step.hint && (
@@ -861,15 +853,27 @@ function GuideRail({
  * the whole query cache. Reading the query directly would unmount the guide and drop the step.
  */
 export default function SetupWizard() {
+  const { data: setup } = useSetupStatus()
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!setup) return
+    if (setup.completed) setOpen(false)
+    else if (!open) setOpen(true)
+  }, [setup, open])
+
+  // The guide's own queries (settings, connections, dump progress) only run while it is open.
+  return open ? <SetupGuide /> : null
+}
+
+function SetupGuide() {
   const { t } = useLingui()
   const navigate = useNavigate()
-  const { data: setup } = useSetupStatus()
   const complete = useCompleteSetup()
   const { data: metadata } = useMetadataSettings()
   const steps = useSteps()
   // Skip still leaves early: the gate in front of the app then waits for the database instead.
   const ready = Boolean(metadata?.dumpPresent)
-  const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
   const [visited, setVisited] = useState<Set<number>>(() => new Set([0]))
   const titleRef = useRef<HTMLHeadingElement>(null)
@@ -885,17 +889,6 @@ export default function SetupWizard() {
     else unsaved.current.delete(id)
     setUnsavedCount(unsaved.current.size)
   }, [])
-
-  useEffect(() => {
-    if (!setup) return
-    if (setup.completed) {
-      setOpen(false)
-    } else if (!open) {
-      setOpen(true)
-      setActive(0)
-      setVisited(new Set([0]))
-    }
-  }, [setup, open])
 
   useEffect(() => {
     if (unsavedCount === 0) setConfirmLeave(false)
@@ -940,8 +933,6 @@ export default function SetupWizard() {
 
   const confirmedFinish = (then?: string) => requireConfirm(() => finish(then))
 
-  if (!open) return null
-
   const step = steps[active]
   const stepNumber = active + 1
   const stepTotal = steps.length
@@ -954,7 +945,7 @@ export default function SetupWizard() {
       withCloseButton={false}
       closeOnEscape={false}
       padding={0}
-      transitionProps={{ duration: 0 }}
+      transitionProps={NO_TRANSITION}
       classNames={{ content: 'setup-modal', body: 'setup-modal-body' }}
       attributes={{ content: { 'aria-label': t`Setup guide` } }}
     >

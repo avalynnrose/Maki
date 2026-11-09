@@ -10,8 +10,33 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Maki.Api.Services;
 
-public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> logger) : BackgroundService
+public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> logger,
+    Maki.Api.Jobs.ArtifactBuildGate? buildGate = null) : BackgroundService
 {
+    internal static readonly TimeSpan BusyInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// The pass interval with no scan queued, no repair downloading and nothing new to analyse. Four
+    /// passes a minute were 20 to 25 queries and a <c>Directory.Exists</c> per root, which can keep
+    /// a NAS array from spinning down. A queued scan does not wait for it: see <see cref="Wake"/>.
+    /// </summary>
+    internal static readonly TimeSpan IdleInterval = TimeSpan.FromSeconds(60);
+
+    private static readonly SemaphoreSlim Wakeup = new(0, 1);
+
+    /// <summary>Starts the next pass now. Call after queueing a scan.</summary>
+    public static void Wake()
+    {
+        try
+        {
+            Wakeup.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // A wake is already pending.
+        }
+    }
+
     private bool _zoneWarned;
 
     /// <summary>
@@ -83,6 +108,7 @@ public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> log
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            var busy = true;
             try
             {
                 using var scope = scopes.CreateScope();
@@ -96,6 +122,7 @@ public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> log
                     await settings.SetAsync(SettingKeys.HealthIncrementalSince, baselineText, stoppingToken);
                 }
                 var baseline = DateTime.Parse(baselineText, null, System.Globalization.DateTimeStyles.RoundtripKind);
+                var arrivals = false;
                 if (options.AutomaticScanning)
                 {
                     var zone = ResolveZone(options.TimeZone);
@@ -110,11 +137,12 @@ public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> log
                     // Imports and downloads change ChapterFile.DateAdded or add a new row.
                     // A scan skips a series while it has queue rows in flight and an offline root cannot
                     // be read at all, so neither would ever move AnalyzedAt and the same scan would be
-                    // queued again on every pass.
-                    var onlineRoots = (await db.RootFolders.Select(r => new { r.Id, r.Path }).ToListAsync(stoppingToken))
-                        .Where(r => Directory.Exists(r.Path)).Select(r => r.Id).ToList();
+                    // queued again on every pass. The roots are only touched when something is waiting.
                     var unanalysed = UnanalysedSince(db, baseline);
-                    var series = await unanalysed
+                    arrivals = await unanalysed.AnyAsync(stoppingToken);
+                    var onlineRoots = !arrivals ? [] : (await db.RootFolders.Select(r => new { r.Id, r.Path }).ToListAsync(stoppingToken))
+                        .Where(r => Directory.Exists(r.Path)).Select(r => r.Id).ToList();
+                    var series = !arrivals ? [] : await unanalysed
                         .Where(f => db.Series.Any(s => s.Id == f.SeriesId && onlineRoots.Contains(s.RootFolderId)))
                         .Where(f => !db.DownloadQueue.Any(q => q.SeriesId == f.SeriesId && q.Status != QueueStatus.Completed && q.Status != QueueStatus.Failed && q.Status != QueueStatus.Cancelled))
                         // An import still waiting on its match rewrites every file's ComicInfo when it
@@ -131,7 +159,13 @@ public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> log
                     await db.SaveChangesAsync(stoppingToken);
                     await AdvanceBaselineAsync(db, settings, baseline, DateTime.UtcNow, stoppingToken);
                 }
-                var scan = await db.HealthScans.Where(s => s.Status == "pending" || s.Status == "running").OrderBy(s => s.Id).FirstOrDefaultAsync(stoppingToken);
+                var active = db.HealthScans.Where(s => s.Status == "pending" || s.Status == "running");
+                // A verify reads every byte; while an artifact build runs it waits for a later pass
+                // (15 s while a scan is queued) rather than holding this one, so a cancel still lands.
+                // Scans that only stat files go ahead of it meanwhile.
+                var building = buildGate is { IsIdle: false };
+                var scan = await (building ? active.Where(s => !s.Verify) : active).OrderBy(s => s.Id).FirstOrDefaultAsync(stoppingToken);
+                var deferred = building && scan == null && await active.AnyAsync(s => s.Verify, stoppingToken);
                 if (scan != null)
                 {
                     var before = await db.HealthFindings.MaxAsync(f => (int?)f.Id, stoppingToken) ?? 0;
@@ -162,7 +196,9 @@ public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> log
                                 localizer.GetFor(locale, "notify.scan.findings.body", new { count = found })));
                     }
                 }
-                foreach (var op in await db.HealthOperations.Where(o => o.Kind == "repair" && o.Status == "downloading").ToListAsync(stoppingToken))
+                var downloading = await db.HealthOperations.Where(o => o.Kind == "repair" && o.Status == "downloading").ToListAsync(stoppingToken);
+                busy = scan != null || deferred || arrivals || downloading.Count > 0;
+                foreach (var op in downloading)
                 {
                     var items = await db.DownloadQueue.Where(q => q.HealthOperationId == op.Id).ToListAsync(stoppingToken);
                     if (items.Any(i => i.Status is QueueStatus.Failed or QueueStatus.Cancelled))
@@ -213,7 +249,7 @@ public class HealthWorker(IServiceScopeFactory scopes, ILogger<HealthWorker> log
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { logger.LogError(ex, "Health worker pass failed; retrying"); }
-            await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+            await Wakeup.WaitAsync(busy ? BusyInterval : IdleInterval, stoppingToken);
         }
     }
 }

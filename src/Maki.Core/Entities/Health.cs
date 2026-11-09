@@ -139,6 +139,15 @@ public class HealthOperation
     public string? Error { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? FinishedAt { get; set; }
+
+    /// <summary>Set when someone cleared a finished operation off the Repairs list. The row stays for the record.</summary>
+    public DateTime? DismissedAt { get; set; }
+
+    /// <summary>
+    /// A deletion only: the byte-identical copy the deleted file's chapters move to, chosen when the
+    /// deletion was previewed. Null when the chapters are unlinked instead, or nothing backs them.
+    /// </summary>
+    public int? RelinkFileId { get; set; }
 }
 
 public class HealthHistory

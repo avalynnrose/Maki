@@ -27,9 +27,10 @@ public class SideInterestRailService(
         db.Scope.SetUser(scope.UserId, scope.AllRootFolders);
         var allowed = ContentRating.Allowed(scope.MaxContentRating);
         var rows = await db.Series.AsNoTracking()
+            .Active()
             .Where(s => s.MangaBakaId != null && s.Incognito != IncognitoMode.Full
                 && allowed.Contains(s.ContentRating ?? ContentRating.Safe)
-                && !db.UserSeriesStates.Any(u => u.SeriesId == s.Id && u.Rating < 5))
+                && !db.UserSeriesStates.Any(u => u.SeriesId == s.Id && (u.Rating ?? u.ProvisionalRating) < 5))
             .Select(s => new { s.MangaBakaId, s.Title, s.Genres, s.Tags })
             .ToListAsync(ct);
         var eligible = (await seedWeights.SnapshotAsync(db, scope, ct)).Effective.EligibleIds.ToHashSet();
@@ -77,7 +78,7 @@ public class SideInterestRailService(
         return selected;
     }
 
-    internal static IReadOnlyList<string> CoreStoryTags(byte[]? blob, IReadOnlyDictionary<int, TagInfo> vocabulary) =>
+    internal static IReadOnlyList<string> CoreStoryTags(ReadOnlySpan<byte> blob, IReadOnlyDictionary<int, TagInfo> vocabulary) =>
         TagMath.Unpack(blob)
             .Where(t => t.Class == TagMath.Core && vocabulary.TryGetValue(t.Id, out var info)
                 && !info.IsSpoiler && TagMath.IsStoryCategory(info.Category))
@@ -112,10 +113,10 @@ public class SideInterestRailService(
                 new RecommendationRequest(SeedIds: ids, Filters: filters, Refresh: refresh), scope, ct);
             // Recheck against the index because the recommender's SQL fallback cannot filter tags.
             // Relations are omitted: a small interest row should not fill with sequels of its seeds.
-            var items = result.Similar.Where(item => !seen.Contains(item.ProviderId)
+            var items = RecommendationReasons.Balance(result.Similar.Where(item => !seen.Contains(item.ProviderId)
                     && long.TryParse(item.ProviderId, out var id) && index.TryGetRow(id, out var row)
                     && index.Matches(row, plan))
-                .DistinctBy(item => item.ProviderId).Take(20).ToList();
+                .DistinctBy(item => item.ProviderId).Take(20).ToList());
             if (items.Count < 3) continue;
             foreach (var item in items) seen.Add(item.ProviderId);
             rails.Add(new DiscoverRail(

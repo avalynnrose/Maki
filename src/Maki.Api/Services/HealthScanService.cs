@@ -52,6 +52,9 @@ public class HealthScanService(MakiDbContext db)
                 .ToHashSet(seen.Comparer));
         var files = new List<HealthFile>();
         var retired = new List<int>();
+        // Rows of a deleted root are never enumerated below, and left live their hashes read as duplicates.
+        if (scan.RootFolderId == null && scan.SeriesId == null && selected.Length == 0)
+            retired.AddRange(await HealthInventory.RetireAsync(db, db.HealthFiles.Where(f => !db.RootFolders.Any(r => r.Id == f.RootFolderId)), ct));
         foreach (var root in roots)
         {
             if (scan.RootFolderId != null && root.Id != scan.RootFolderId) continue;
@@ -62,6 +65,7 @@ public class HealthScanService(MakiDbContext db)
                 var tracked = await db.ChapterFiles.AsNoTracking()
                     .Where(f => db.Series.Any(s => s.Id == f.SeriesId && s.RootFolderId == root.Id))
                     .Where(f => scan.SeriesId == null || f.SeriesId == scan.SeriesId)
+                    .Select(f => new TrackedFile(f.Id, f.SeriesId, f.RelativePath))
                     .ToListAsync(ct);
                 // A series scan only ever reports that series' tracked files, so it needs only the
                 // inventory rows for them; a row still unlinked from the last full sweep is matched
@@ -70,11 +74,26 @@ public class HealthScanService(MakiDbContext db)
                     ? []
                     : tracked.SelectMany(f => new[] { f.RelativePath, f.RelativePath.Replace('\\', '/'), f.RelativePath.Replace('/', '\\') })
                         .Distinct().ToList();
-                var knownFiles = await db.HealthFiles
+                // Everything but AnalysisJson, then attached: this phase only moves paths and links,
+                // and a row's analysis is tens of KB of page fingerprints, about 100 MB over 50k
+                // files. Attached rows write back only the columns changed here.
+                var knownFiles = await db.HealthFiles.AsNoTracking()
                     .Where(f => f.RootFolderId == root.Id)
                     .Where(f => scan.SeriesId == null || f.SeriesId == scan.SeriesId || trackedSpellings.Contains(f.RelativePath))
+                    .Select(f => new HealthFile
+                    {
+                        Id = f.Id, RootFolderId = f.RootFolderId, SeriesId = f.SeriesId, ChapterFileId = f.ChapterFileId,
+                        RelativePath = f.RelativePath, Version = f.Version, Size = f.Size, ModifiedAt = f.ModifiedAt,
+                        ContentHash = f.ContentHash, AnalyzerVersion = f.AnalyzerVersion, VerifiedVersion = f.VerifiedVersion,
+                        Status = f.Status, AnalyzedAt = f.AnalyzedAt, Removed = f.Removed,
+                    })
                     .ToListAsync(ct);
-                var trackedByKey = new Dictionary<string, ChapterFile>(seen.Comparer);
+                for (var i = 0; i < knownFiles.Count; i++)
+                {
+                    if (db.HealthFiles.Local.FindEntry(knownFiles[i].Id) is { } entry) knownFiles[i] = entry.Entity;
+                    else db.HealthFiles.Attach(knownFiles[i]);
+                }
+                var trackedByKey = new Dictionary<string, TrackedFile>(seen.Comparer);
                 foreach (var f in tracked.OrderBy(f => f.Id)) trackedByKey.TryAdd(LibraryPaths.ComparisonKey(f.RelativePath), f);
                 var knownByKey = knownFiles
                     .GroupBy(f => LibraryPaths.ComparisonKey(f.RelativePath), seen.Comparer)
@@ -82,14 +101,29 @@ public class HealthScanService(MakiDbContext db)
                 var paths = new HashSet<string>(trackedByKey.Keys, seen.Comparer);
                 foreach (var known in knownFiles.Where(f => !f.Removed)) paths.Add(LibraryPaths.ComparisonKey(known.RelativePath));
                 // Series and selected-file scans do not enumerate unrelated unlinked archives.
+                var enumerated = new HashSet<string>(StringComparer.Ordinal);
                 if (scan.SeriesId == null && selected.Length == 0)
-                    foreach (var path in HealthPaths.Archives(root.Path)) paths.Add(LibraryPaths.ComparisonKey(Path.GetRelativePath(root.Path, path)));
+                    foreach (var path in HealthPaths.Archives(root.Path))
+                    {
+                        var key = LibraryPaths.ComparisonKey(Path.GetRelativePath(root.Path, path));
+                        paths.Add(key);
+                        enumerated.Add(key);
+                    }
+                var aliases = CaseAliases(root.Path, paths, trackedByKey, enumerated);
                 foreach (var key in paths)
                 {
                     ct.ThrowIfCancellationRequested();
                     var relative = key.Replace('/', Path.DirectorySeparatorChar);
                     var absolute = HealthPaths.Resolve(root.Path, key);
                     var trackedFile = trackedByKey.GetValueOrDefault(key);
+                    // Another spelling of a file a record already names. As its own row it read as an
+                    // unlinked duplicate of itself, and deleting that "spare" deleted the only copy.
+                    if (aliases.Contains(key))
+                    {
+                        foreach (var row in knownByKey.GetValueOrDefault(key) ?? [])
+                            if (!row.Removed) { row.Removed = true; retired.Add(row.Id); }
+                        continue;
+                    }
                     if (trackedFile == null && trackedFullPaths.Any(t => t.Key != root.Id && t.Value.Contains(absolute))) continue;
                     if (!seen.Add(absolute)) continue;
                     if (scan.SeriesId != null && trackedFile?.SeriesId != scan.SeriesId) continue;
@@ -127,12 +161,14 @@ public class HealthScanService(MakiDbContext db)
         }
         // Explicit selections include unlinked inventory records even when disk enumeration is skipped.
         foreach (var file in await db.HealthFiles.Where(f => selected.Contains(f.Id) && !f.Removed).ToListAsync(ct))
-            if (!files.Contains(file)) files.Add(file);
+            if (!file.Removed && !files.Contains(file)) files.Add(file);
         scan.Total = files.Count;
         await db.SaveChangesAsync(ct);
         if (retired.Count > 0)
             await db.HealthFindings.Where(f => retired.Contains(f.FileId) && f.State != "resolved")
                 .ExecuteUpdateAsync(u => u.SetProperty(f => f.State, "resolved"), ct);
+        // Clears duplicates left open by deletes from before deletion resolved them itself.
+        await HealthDuplicates.ResolveLonelyAsync(db, null, ct);
 
         // From here the scan works by id and lets every entity go after each file. Keeping them
         // tracked is what a scan naturally does and it does not survive a real library: each
@@ -330,7 +366,7 @@ public class HealthScanService(MakiDbContext db)
         file.AnalyzedAt = DateTime.UtcNow;
         file.AnalysisJson = JsonSerializer.Serialize(analysis, Json);
         if (!await db.HealthFileVersions.AnyAsync(v => v.Id == file.Version, ct))
-            db.HealthFileVersions.Add(new() { Id = file.Version, FileId = file.Id, ContentHash = file.ContentHash, Size = file.Size, ModifiedAt = file.ModifiedAt, RelativePath = file.RelativePath, AnalyzerVersion = file.AnalyzerVersion });
+            db.HealthFileVersions.Add(HealthInventory.VersionOf(file));
         var cacheId = $"{analysis.Hash}:{ArchiveHealthAnalyzer.VerifyVersion}";
         if (analysis.Hash != null && analysis.Status == "complete" && !await db.HealthAnalyses.AnyAsync(a => a.Id == cacheId, ct))
             db.HealthAnalyses.Add(new() { Id = cacheId, ContentHash = analysis.Hash, AnalyzerVersion = ArchiveHealthAnalyzer.VerifyVersion, AnalysisJson = file.AnalysisJson });
@@ -338,7 +374,8 @@ public class HealthScanService(MakiDbContext db)
         // the file. It stays on the analysis and never becomes a finding.
         var problems = analysis.Problems.Where(p => p.Kind != "incomplete").ToList();
         if (file.ChapterFileId == null) problems.Add(new("unlinked", "warning", "health.finding.unlinked"));
-        else if (await db.ChapterFiles.AnyAsync(f => f.Id == file.ChapterFileId && f.Size != size, ct))
+        // A missing file has no size to compare; it is already reported as missing.
+        else if (size >= 0 && await db.ChapterFiles.AnyAsync(f => f.Id == file.ChapterFileId && f.Size != size, ct))
             problems.Add(new("sizeMismatch", "warning", "health.finding.sizeMismatch"));
         // Byte-identical archives can only be spotted by files that have both been read.
         if (analysis.Hash != null)
@@ -365,8 +402,12 @@ public class HealthScanService(MakiDbContext db)
         // from reading them. A finding on bytes that have since changed is resolved regardless:
         // the version check above owns that.
         var blind = analysis.Verified ? [] : new[] { "damagedImage", "corrupt", "duplicate" };
+        // These two come from the database, not the archive, so they are decided on every pass
+        // whatever the archive's status. A missing file never reaches "complete", and without this
+        // the size mismatch it used to be given alongside "missing" would never close.
+        string[] fromRecords = ["unlinked", "sizeMismatch"];
         foreach (var old in existing.Where(x => x.Version != file.Version ||
-                     (analysis.Status == "complete" && !blind.Contains(x.Kind) && !problems.Any(p => p.Kind == x.Kind))))
+                     ((analysis.Status == "complete" || fromRecords.Contains(x.Kind)) && !blind.Contains(x.Kind) && !problems.Any(p => p.Kind == x.Kind))))
             old.State = "resolved";
         foreach (var group in problems.GroupBy(p => p.Kind))
         {
@@ -393,6 +434,36 @@ public class HealthScanService(MakiDbContext db)
             else if (finding.State == "resolved") finding.State = "open";
         }
         await db.SaveChangesAsync(ct);
+    }
+
+    private sealed record TrackedFile(int Id, int SeriesId, string RelativePath);
+
+    /// <summary>
+    /// Keys that differ from another key only in case and open the same file, which a case-insensitive
+    /// mount on a case-sensitive host allows. The spelling a record names is kept, then the one on disk.
+    /// </summary>
+    private static HashSet<string> CaseAliases(string rootPath, IEnumerable<string> keys,
+        Dictionary<string, TrackedFile> tracked, HashSet<string> enumerated)
+    {
+        var aliases = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in keys.GroupBy(k => k, StringComparer.OrdinalIgnoreCase).Where(g => g.Skip(1).Any()))
+        {
+            var keep = group
+                .OrderBy(k => tracked.ContainsKey(k) ? 0 : enumerated.Contains(k) ? 1 : 2)
+                .ThenBy(k => tracked.TryGetValue(k, out var t) ? t.Id : 0)
+                .ThenBy(k => k, StringComparer.Ordinal)
+                .First();
+            foreach (var other in group.Where(k => k != keep && !tracked.ContainsKey(k)))
+            {
+                // A folder that cannot be read is no reason to give up on the rest of the root.
+                try
+                {
+                    if (LibraryPaths.IsSameFile(HealthPaths.Resolve(rootPath, keep), HealthPaths.Resolve(rootPath, other))) aliases.Add(other);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+            }
+        }
+        return aliases;
     }
 }
 

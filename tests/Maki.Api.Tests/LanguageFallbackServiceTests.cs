@@ -87,7 +87,7 @@ public class LanguageFallbackServiceTests : IDisposable
         services.AddScoped(sp => new SourceMatchService(
             sp.GetRequiredService<MakiDbContext>(), registry, _settings, availability,
             new SourceExternalIdCache(TimeProvider.System), new SourceMatchSearchCache(TimeProvider.System),
-            NullLogger<SourceMatchService>.Instance));
+            new FakeRelatedTitles().Provider(), NullLogger<SourceMatchService>.Instance));
         return new LanguageFallbackService(
             services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             _settings, availability, registry, _inbox, NullLogger<LanguageFallbackService>.Instance);

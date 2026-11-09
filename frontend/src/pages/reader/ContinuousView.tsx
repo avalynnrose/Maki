@@ -1,7 +1,14 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Stack, Text } from '@mantine/core'
 import { Trans, useLingui } from '@lingui/react/macro'
-import type { ReaderFit } from './prefs'
+import { enhanceBudget } from '../../lib/enhance/budget'
+import type { EnhanceFallback, EnhanceMethod, ReaderEnhance, ReaderFit } from './prefs'
+import EnhancedPage from './EnhancedPage'
+import NextChapterHint from './NextChapterHint'
+import { useCompareKey } from './compareHold'
+import { EnhanceScope, presetFor, useEnhanceEngine, type PageEnhance, type StretchedReport } from './enhanceRuntime'
+import { FULL_REGION } from './pageShape'
+import type { ServerEnhance } from './useServerEnhance'
 
 const FIT_CLASS: Record<ReaderFit, string> = {
   width: 'reader-fit-width',
@@ -35,12 +42,96 @@ function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.floor(sorted.length / 2)]
 }
+
+const ENHANCE_MAX_PAGES = 32
+/** Share of the engine's budget spent on the pages ahead; the rest keeps the pages just read. */
+const ENHANCE_AHEAD_SHARE = 0.75
+const NO_RANGE: number[] = []
+
+/**
+ * The pages to enhance: the current one, the pages ahead in order, then the pages behind. Sized in
+ * displayed device pixels against the engine's budget rather than in pages, so a chapter of a few
+ * very tall slices runs a page or two ahead and one of many short slices runs far down the strip.
+ * The pages either side of the current one are always in. `beyond` is how many pages past the last
+ * one the ahead share still covers, counted at the size of the pages ahead. `server` is the range
+ * without the pages behind that have left the screen: the server's one worker would otherwise spend
+ * a tall slice's seconds on a page already read while the next one waits.
+ */
+function enhanceRange(
+  elements: (HTMLImageElement | null)[],
+  page: number,
+  count: number,
+): { range: number[]; beyond: number; server: number[] } {
+  if (count === 0) return { range: NO_RANGE, beyond: 0, server: NO_RANGE }
+  const dpr = window.devicePixelRatio || 1
+  const pixels = (index: number) => {
+    const rect = elements[index]?.getBoundingClientRect()
+    return rect ? rect.width * rect.height * dpr * dpr : 0
+  }
+  const budget = enhanceBudget()
+  const range = [page]
+  let left = budget * ENHANCE_AHEAD_SHARE - pixels(page)
+  let index = page + 1
+  let spent = 0
+  for (; index < count && range.length < ENHANCE_MAX_PAGES; index++) {
+    const size = pixels(index)
+    if (index > page + 1 && size > left) break
+    range.push(index)
+    left -= size
+    spent += size
+  }
+  let beyond = 0
+  if (index >= count) {
+    const typical = range.length > 1 ? spent / (range.length - 1) : pixels(page)
+    const fits = typical > 0 ? Math.floor(Math.max(0, left) / typical) : ENHANCE_MAX_PAGES
+    beyond = Math.min(ENHANCE_MAX_PAGES, Math.max(page === count - 1 ? 1 : 0, fits))
+  }
+  const server = [...range]
+  left = budget * (1 - ENHANCE_AHEAD_SHARE)
+  for (let index = page - 1; index >= 0 && range.length < ENHANCE_MAX_PAGES; index--) {
+    const size = pixels(index)
+    if (index < page - 1 && size > left) break
+    range.push(index)
+    left -= size
+    const rect = elements[index]?.getBoundingClientRect()
+    if (rect && rect.bottom > 0 && rect.top < window.innerHeight) server.push(index)
+  }
+  return { range, beyond, server }
+}
+
 // How close to the true bottom counts as "at the bottom": scrollHeight/clientHeight are
 // fractional in some browsers, so an exact `=== ` check misses by sub-pixel amounts.
 const BOTTOM_EPSILON = 2
 // Scroll banked towards the next chapter is dropped after this long without more of it, so a
 // half-filled meter left behind does not turn the next wheel notch into a chapter jump.
 const PAST_END_IDLE_MS = 1200
+// The card stays hidden until the meter is this full: the tail of a fling that lands on the bottom,
+// or a finger settling there, is not a request for the next chapter. Once up, it stays up until
+// the meter is empty.
+const HINT_SHOW_AT = 0.15
+// How long the card stays after the meter empties, fade included (theme.css, `[data-leaving]`).
+// Scrolling back down within it picks the same card up again instead of flashing a new one in.
+const HINT_LINGER_MS = 600
+// A full meter holds until the next chapter's pages arrive. If they never do (a failed load), it
+// lets go after this long so the strip is not stuck.
+const LEAVING_GIVE_UP_MS = 8000
+// After a jump, wheel input only counts again once it pauses this long, so the rest of the fling
+// that filled the meter does not start filling it again.
+const WHEEL_GESTURE_GAP_MS = 250
+const WHEEL_LINE_PX = 40
+
+function useLinger(on: boolean, ms: number): boolean {
+  const [held, setHeld] = useState(on)
+  useEffect(() => {
+    if (on) {
+      setHeld(true)
+      return
+    }
+    const timer = setTimeout(() => setHeld(false), ms)
+    return () => clearTimeout(timer)
+  }, [on, ms])
+  return on || held
+}
 
 interface StripPageProps {
   index: number
@@ -50,6 +141,12 @@ interface StripPageProps {
   scale: number
   tone: string | undefined
   eager: boolean
+  /** Set only for pages in the eager window while Enhance is on. */
+  enhance: PageEnhance | null
+  /** Set with `enhance` while a server method is in use. */
+  server: ServerEnhance | null
+  /** Distance from the current page in reading order; pages after it come first. */
+  priority: number
   register: (index: number, element: HTMLImageElement | null) => void
   onSettled: (index: number, element: HTMLImageElement) => void
 }
@@ -66,12 +163,17 @@ const StripPage = memo(function StripPage({
   scale,
   tone,
   eager,
+  enhance,
+  server,
+  priority,
   register,
   onSettled,
 }: StripPageProps) {
   const { t } = useLingui()
   const image = useRef<HTMLImageElement | null>(null)
   const [failed, setFailed] = useState(false)
+  const [loaded, setLoaded] = useState<HTMLImageElement | null>(null)
+  const [covered, setCovered] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const pageNumber = index + 1
   const url = attempt === 0 ? src : `${src}${src.includes('?') ? '&' : '?'}retry=${attempt}`
@@ -86,10 +188,12 @@ const StripPage = memo(function StripPage({
 
   const retry = () => {
     image.current?.removeAttribute('data-loaded')
+    setLoaded(null)
     setFailed(false)
     setAttempt((n) => n + 1)
   }
 
+  const alt = t`${label} - page ${pageNumber}`
   return (
     <>
       <img
@@ -97,7 +201,10 @@ const StripPage = memo(function StripPage({
         data-page={index}
         data-no-cover-fallback
         src={url}
-        alt={t`${label} - page ${pageNumber}`}
+        alt={alt}
+        // Stays painted under the enhanced page: Firefox snaps a canvas's edges on its own, worst
+        // while scrolling, and a seam that opens between two pages then shows this page, not the background.
+        aria-hidden={enhance && covered ? true : undefined}
         className={`reader-page ${FIT_CLASS[fit]}`}
         style={{
           ...(fit === 'original' && scale !== 100 ? { zoom: scale / 100 } : undefined),
@@ -111,12 +218,32 @@ const StripPage = memo(function StripPage({
         loading={eager ? 'eager' : 'lazy'}
         decoding="async"
         draggable={false}
-        onLoad={(event) => onSettled(index, event.currentTarget)}
+        onLoad={(event) => {
+          setLoaded(event.currentTarget)
+          onSettled(index, event.currentTarget)
+        }}
         onError={(event) => {
           setFailed(true)
           onSettled(index, event.currentTarget)
         }}
       />
+      {enhance && loaded && !failed && (
+        <EnhancedPage
+          image={loaded}
+          src={src}
+          region={FULL_REGION}
+          rotate={0}
+          alt={alt}
+          tone={tone}
+          enhance={enhance}
+          page={index}
+          server={server}
+          priority={priority}
+          box={loaded}
+          overlay
+          onShowing={setCovered}
+        />
+      )}
       {failed && (
         <Stack align="center" gap="xs" py="xl">
           <Text c="var(--ink-3)" size="sm">
@@ -143,12 +270,19 @@ export default function ContinuousView({
   seekVersion,
   onPastEnd,
   hasNext,
+  nextLabel,
   fit,
   scale,
   tone,
   gap,
   label,
   pastEndLabel,
+  enhance = 'off',
+  enhanceMethod = 'a4k-m',
+  enhanceFallback = 'a4k-m',
+  server = null,
+  onStretched,
+  onEnhanceRange,
 }: {
   urls: string[]
   page: number
@@ -157,12 +291,15 @@ export default function ContinuousView({
    *  click, Home/End); this is what triggers a scroll. Plain `page` changes driven by this
    *  view's own scroll tracking must NOT scroll, or the view would fight the user's scroll. */
   seekVersion: number
-  /** Fired once the bottom-of-strip progress bar fills, the strip's analogue of turning past the
-   *  last page in paged mode. */
-  onPastEnd: () => void
+  /** Fired once the bottom-of-strip meter fills, the strip's analogue of turning past the last page
+   *  in paged mode. Returning true means the next chapter is on its way: the meter then stays full
+   *  and takes no more input until `urls` change. */
+  onPastEnd: () => boolean | void
   /** Picks which bottom-of-strip prompt shows: the fillable "scroll for next chapter" meter, or,
    *  on the last chapter, an inert "no more chapters" one that never advances anywhere. */
   hasNext: boolean
+  /** The next chapter's label, which the meter names as its target. */
+  nextLabel?: string | null
   /** What the fillable meter says; the Discover preview has no next chapter to scroll into. */
   pastEndLabel?: React.ReactNode
   fit: ReaderFit
@@ -172,6 +309,20 @@ export default function ContinuousView({
   tone?: string
   gap: number
   label: string
+  enhance?: ReaderEnhance
+  enhanceMethod?: EnhanceMethod
+  /** What a server method shows until its page is ready there. */
+  enhanceFallback?: EnhanceFallback
+  /** Set while a server method is in use and the server tier can serve it. */
+  server?: ServerEnhance | null
+  /** The pages `auto` enhances: shown at 1.2x their size or more as measured on screen, or soft. */
+  onStretched?: StretchedReport
+  /**
+   * The pages being enhanced, current first, then ahead, then behind. `beyond` is how many of the
+   * next chapter's pages the window would reach past the last one. `server` is what the server is
+   * asked for: the same pages minus those behind that are off screen.
+   */
+  onEnhanceRange?: (pages: number[], beyond: number, server: number[]) => void
 }) {
   const container = useRef<HTMLDivElement>(null)
   const pages = useRef<(HTMLImageElement | null)[]>([])
@@ -180,16 +331,71 @@ export default function ContinuousView({
   // events in the same frame accumulate correctly instead of each reading a stale 0.
   const progress = useRef(0)
   const [pastEndProgress, setPastEndProgress] = useState(0)
+  const hintShown = useRef(false)
+  const [hintOn, setHintOn] = useState(false)
+  const setMeter = useCallback((value: number) => {
+    progress.current = value
+    setPastEndProgress(value)
+    hintShown.current = value >= HINT_SHOW_AT || (hintShown.current && value > 0)
+    setHintOn(hintShown.current)
+  }, [])
+  const hintMounted = useLinger(hintOn, HINT_LINGER_MS)
   // A finger is pulling the meter, which fills by distance and moves on only on release.
   const [pulling, setPulling] = useState(false)
-  // The last chapter's counterpart to `pastEndProgress`: shown under the same conditions, but it
-  // only ever says the strip has run out, so nothing accumulates and nothing fires.
-  const [atLibraryEnd, setAtLibraryEnd] = useState(false)
+  // The meter filled and the next chapter is loading.
+  const leaving = useRef(false)
+  const [opening, setOpening] = useState(false)
+  // Wheel input is ignored until it pauses, set on every jump. Both outlive the listener effect,
+  // which runs again for the next chapter while the fling is still going.
+  const wheelHeld = useRef(false)
+  const lastWheelAt = useRef(0)
+  const onPastEndRef = useRef(onPastEnd)
+  onPastEndRef.current = onPastEnd
+  const hasNextRef = useRef(hasNext)
+  hasNextRef.current = hasNext
   // Read fresh inside the seek effect below without making `page` itself a dependency: the band
   // tracker updates `page` continuously while scrolling, and re-running the seek effect on every
   // one of those would re-scroll to wherever the user just scrolled from.
   const pageRef = useRef(page)
   pageRef.current = page
+
+  // Only the enhance range around the current page is enhanced; a page leaving it drops its canvas
+  // and its cached result.
+  const enhanceOn = enhance !== 'off'
+  const preset = presetFor(enhanceMethod, enhanceFallback)
+  const engineState = useEnhanceEngine(enhanceOn && preset !== null)
+  const engine = engineState.status === 'ready' ? engineState.engine : null
+  useCompareKey(enhanceOn)
+  const stretchedRef = useRef(onStretched)
+  stretchedRef.current = onStretched
+  const [scope] = useState(() => new EnhanceScope(undefined, (wanted, plain) => stretchedRef.current?.(wanted, plain)))
+  useEffect(() => {
+    scope.attach(engine)
+    return () => scope.release()
+  }, [scope, engine, urls])
+  useEffect(() => () => scope.forgetPages(), [scope, urls])
+  const layout = `${fit}|${scale}`
+  const serverOn = server !== null
+  const pageEnhance = useMemo<PageEnhance | null>(
+    () =>
+      (engine || serverOn) && enhance !== 'off'
+        ? { mode: enhance, preset, engine, scope, layout }
+        : null,
+    [engine, serverOn, enhance, preset, scope, layout],
+  )
+  const [range, setRange] = useState<number[]>(NO_RANGE)
+  const [beyond, setBeyond] = useState(0)
+  const [serverRange, setServerRange] = useState<number[]>(NO_RANGE)
+  const inRange = useMemo(() => new Set(range), [range])
+  const isEager = (index: number) => index < 3 || Math.abs(index - page) <= 2 || inRange.has(index)
+  useEffect(() => {
+    scope.retain(new Set(range.map((index) => urls[index])))
+  }, [scope, urls, range])
+  const rangeRef = useRef(onEnhanceRange)
+  rangeRef.current = onEnhanceRange
+  useEffect(() => {
+    rangeRef.current?.(range, beyond, serverRange)
+  }, [range, beyond, serverRange])
 
   // Set by the sentinel effect below; image load handlers re-run it once a page settles.
   const reportEnd = useRef<() => void>(() => {})
@@ -201,13 +407,46 @@ export default function ContinuousView({
   const samples = useRef<{ widths: number[]; aspects: number[] }>({ widths: [], aspects: [] })
   const [shape, setShape] = useState<PageShape | null>(null)
 
+  // Measured again whenever a page or the layout moves the strip; pages not loaded yet are counted
+  // at their placeholder size, which borrows the loaded pages' shape.
   useEffect(() => {
-    progress.current = 0
-    setPastEndProgress(0)
-    setAtLibraryEnd(false)
+    if (!enhanceOn) {
+      setRange(NO_RANGE)
+      setBeyond(0)
+      setServerRange(NO_RANGE)
+      return
+    }
+    const update = () => {
+      const next = enhanceRange(pages.current, Math.min(page, urls.length - 1), urls.length)
+      const same = (previous: number[], pages: number[]) =>
+        previous.length === pages.length && previous.every((index, at) => index === pages[at]) ? previous : pages
+      setRange((previous) => same(previous, next.range))
+      setServerRange((previous) => same(previous, next.server))
+      setBeyond(next.beyond)
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [enhanceOn, urls, page, shape, fit, scale, gap])
+
+  useEffect(() => {
+    leaving.current = false
+    setOpening(false)
+    setPulling(false)
+    setMeter(0)
     samples.current = { widths: [], aspects: [] }
     setShape(null)
-  }, [urls])
+  }, [urls, setMeter])
+
+  useEffect(() => {
+    if (!opening) return
+    const timer = setTimeout(() => {
+      leaving.current = false
+      setOpening(false)
+      setMeter(0)
+    }, LEAVING_GIVE_UP_MS)
+    return () => clearTimeout(timer)
+  }, [opening, setMeter])
 
   // Pages before the seek target whose load can still shift the target's offset. Re-scroll keeps
   // firing while this is non-empty; cleared once every preceding page has reported loaded (or the
@@ -325,37 +564,57 @@ export default function ContinuousView({
     const scroller = container.current?.parentElement
     if (!scroller) return
 
-    const atBottom = () =>
-      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < BOTTOM_EPSILON
+    const fromBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+    const atBottom = () => fromBottom() < BOTTOM_EPSILON
+    // A page at the end still loading will move the bottom when it lands (a credits image is rarely
+    // the size the placeholder guessed), so the meter waits for it rather than fill and then reset.
+    // Pages skipped above the viewport do not count: scroll anchoring keeps them from moving it.
+    const settled = () => {
+      const top = scroller.getBoundingClientRect().top
+      for (let index = urls.length - 1; index >= 0; index--) {
+        const element = pages.current[index]
+        if (!element) continue
+        if (element.getBoundingClientRect().bottom < top) return true
+        if (!element.complete) return false
+      }
+      return true
+    }
+    // The bottom moved away under a partly filled meter (a page grew) while the reader is still
+    // heading down: hold the fill until they reach the new bottom instead of starting over.
+    const grewUnder = () => progress.current > 0 && fromBottom() < scroller.clientHeight
 
     let idle: ReturnType<typeof setTimeout> | undefined
-    const decay = () => {
-      progress.current = 0
-      setPastEndProgress(0)
+    const decay = () => setMeter(0)
+
+    // While the parent is leaving, the meter stays full and every input is ignored. A refusal (the
+    // reader is still settling into this chapter) empties it.
+    const fire = () => {
+      clearTimeout(idle)
+      wheelHeld.current = true
+      if (onPastEndRef.current() === true) {
+        leaving.current = true
+        setOpening(true)
+        setMeter(1)
+      } else {
+        decay()
+      }
     }
 
     // `delta` is in pixels, `distance` how many of them this input needs for a full meter.
     const advance = (delta: number, distance: number) => {
       clearTimeout(idle)
+      if (delta > 0 && (!atBottom() ? grewUnder() : !settled())) {
+        idle = setTimeout(decay, PAST_END_IDLE_MS)
+        return
+      }
       if (delta <= 0 || !atBottom()) {
-        setAtLibraryEnd(false)
-        if (progress.current !== 0) {
-          progress.current = 0
-          setPastEndProgress(0)
-        }
+        if (progress.current !== 0) decay()
         return
       }
-      // Nothing to scroll into, so the prompt appears on the same gesture but stays inert: no
-      // meter, no navigation.
-      if (!hasNext) {
-        setAtLibraryEnd(true)
-        return
-      }
-      progress.current = Math.min(1, progress.current + delta / distance)
-      setPastEndProgress(progress.current)
-      if (progress.current >= 1) {
-        decay()
-        onPastEnd()
+      setMeter(Math.min(1, progress.current + delta / distance))
+      // On the last chapter the card only says the strip has run out, so a full meter goes nowhere.
+      if (hasNextRef.current && progress.current >= 1) {
+        fire()
         return
       }
       idle = setTimeout(decay, PAST_END_IDLE_MS)
@@ -380,23 +639,35 @@ export default function ContinuousView({
     const onWheel = (event: WheelEvent) => {
       abandonSeek()
       const now = performance.now()
+      const sinceLast = now - lastWheelAt.current
+      lastWheelAt.current = now
+      if (leaving.current) return
+      if (wheelHeld.current) {
+        if (sinceLast < WHEEL_GESTURE_GAP_MS) return
+        wheelHeld.current = false
+      }
       if ((touching && now - touchSeenAt < TOUCH_STALE_MS) || now - touchEndedAt < WHEEL_AFTER_TOUCH_MS) return
-      advance(event.deltaY, PAST_END_WHEEL)
+      // deltaY is read before deltaMode: Firefox then reports pixels rather than lines.
+      const delta = event.deltaY
+      const unit = event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? scroller.clientHeight : 1
+      advance(delta * unit, PAST_END_WHEEL)
     }
 
     const onTouchStart = (event: TouchEvent) => {
       abandonSeek()
-      clearTimeout(idle)
       touching = true
       touchSeenAt = performance.now()
+      if (leaving.current) return
+      clearTimeout(idle)
       multiTouch = event.touches.length > 1
       const y = event.touches[0]?.clientY
-      pullFrom = y != null && !multiTouch && atBottom() ? y : null
+      pullFrom = y != null && !multiTouch && atBottom() && settled() ? y : null
       if (multiTouch && progress.current !== 0) decay()
       setPulling(true)
     }
     const onTouchMove = (event: TouchEvent) => {
       touchSeenAt = performance.now()
+      if (leaving.current) return
       if (event.touches.length > 1) multiTouch = true
       if (multiTouch) {
         pullFrom = null
@@ -405,34 +676,30 @@ export default function ContinuousView({
       }
       const y = event.touches[0]?.clientY
       if (y == null) return
-      if (!atBottom()) {
+      if (!atBottom() || !settled()) {
         pullFrom = null
-        setAtLibraryEnd(false)
-        if (progress.current !== 0) decay()
+        if (progress.current !== 0 && !(atBottom() || grewUnder())) decay()
         return
       }
-      pullFrom ??= y
+      // Picks up a fill held while the strip grew from where it was.
+      pullFrom ??= y + progress.current * touchDistance()
       const pull = pullFrom - y
       if (pull <= 0) {
         if (progress.current !== 0) decay()
         return
       }
-      if (!hasNext) {
-        setAtLibraryEnd(true)
-        return
-      }
-      progress.current = Math.min(1, pull / touchDistance())
-      setPastEndProgress(progress.current)
+      setMeter(Math.min(1, pull / touchDistance()))
     }
     const endTouch = (release: boolean) => {
-      const full = release && !multiTouch && hasNext && progress.current >= 1
+      const full = release && !multiTouch && hasNextRef.current && progress.current >= 1
       touching = false
       multiTouch = false
       touchEndedAt = performance.now()
       pullFrom = null
+      if (leaving.current) return
       setPulling(false)
-      if (progress.current !== 0) decay()
-      if (full) onPastEnd()
+      if (full) fire()
+      else if (progress.current !== 0) decay()
     }
     // A finger lifted while another is still down is not the end of the gesture.
     const onTouchEnd = (event: TouchEvent) => {
@@ -464,7 +731,7 @@ export default function ContinuousView({
       window.removeEventListener('blur', onLostFocus)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [urls, hasNext, onPastEnd])
+  }, [urls, setMeter])
 
   return (
     <>
@@ -492,38 +759,26 @@ export default function ContinuousView({
             fit={fit}
             scale={scale}
             tone={tone}
-            eager={index < 3 || Math.abs(index - page) <= 2}
+            eager={isEager(index)}
+            enhance={pageEnhance && inRange.has(index) ? pageEnhance : null}
+            server={pageEnhance && inRange.has(index) ? server : null}
+            priority={pageEnhance && inRange.has(index) ? (index >= page ? (index - page) * 2 : (page - index) * 2 + 1) : 0}
             register={registerPage}
             onSettled={onPageSettled}
           />
         ))}
         <div ref={sentinel} style={{ height: 1 }} />
       </div>
-      {(pastEndProgress > 0 || atLibraryEnd) && (
-        <div className={`reader-next-chapter-hint${atLibraryEnd ? ' is-end' : ''}`}>
-          <span>
-            {atLibraryEnd ? (
-              <Trans>No more chapters</Trans>
-            ) : (
-              pastEndLabel ??
-              (!pulling ? (
-                <Trans>Scroll for next chapter</Trans>
-              ) : pastEndProgress >= 1 ? (
-                <Trans>Release for next chapter</Trans>
-              ) : (
-                <Trans>Pull up for next chapter</Trans>
-              ))
-            )}
-          </span>
-          <div className="reader-next-chapter-bar">
-            {!atLibraryEnd && (
-              <div
-                className="reader-next-chapter-fill"
-                style={{ width: `${Math.min(1, pastEndProgress) * 100}%` }}
-              />
-            )}
-          </div>
-        </div>
+      {hintMounted && (
+        <NextChapterHint
+          progress={pastEndProgress}
+          pulling={pulling}
+          opening={opening}
+          leaving={!hintOn}
+          atEnd={!hasNext}
+          nextLabel={nextLabel}
+          fallbackLabel={pastEndLabel}
+        />
       )}
     </>
   )

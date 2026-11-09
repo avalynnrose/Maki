@@ -1,19 +1,18 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Box, Button, Group, Title, VisuallyHidden } from '@mantine/core'
 import { Trans, useLingui } from '@lingui/react/macro'
 import { msg } from '@lingui/core/macro'
 import {
-  IconBook,
   IconBookmarks,
   IconDeviceTv,
   IconFlame,
   IconFolderDown,
   IconLayoutDashboard,
-  IconPlayerPlay,
+  IconBook,
   IconPlus,
-  IconSparkles,
-} from '@tabler/icons-react'
+  IconCompass,
+} from '../lib/icons'
 import { useHomeFromAnime } from '../api/animeResume'
 import { isOfflineUnavailable } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
@@ -28,19 +27,19 @@ import {
   useReadingHeatmap,
   useRecommendations,
   useRootFolders,
-  useSeries,
+  useHasLibrary,
   useSeriesIdLookup,
   useUiSettings,
   isRailKey,
   railIdOf,
   type HomeLayoutKey,
-  type HomeReadingItem,
   type HomeSection,
   type HomeSectionKey,
   type RecommendationItem,
 } from '../api/hooks'
 import { useCustomRails } from '../api/customRails'
 import { AddRailButton, CustomRailSection } from '../components/rails/CustomRailSection'
+import type { CatalogueSeed } from '../components/CatalogueBrowser'
 import { PageLayoutEditor, PageLayoutEditorLoading } from '../components/layout/PageLayoutEditor'
 import { useLayoutEditMode } from '../components/layout/useLayoutEditMode'
 import { reconcileLayout, sectionVisible } from '../components/layout/pageLayout'
@@ -48,52 +47,49 @@ import { HOME_LAYOUT_CONFIG, HOME_SECTION_DEFS } from '../components/home/homeSe
 import { useReadTracking } from '../api/reader'
 import { DiscoverDetailModal } from '../components/discover/DiscoverDetailModal'
 import { FollowingRail } from '../components/discover/FollowingRail'
-import { ContinueHero, type HeroQueue } from '../components/home/ContinueHero'
+import { ContinueHero, ContinueHeroSkeleton, type HeroQueue } from '../components/home/ContinueHero'
 import { ContinueRail } from '../components/home/ContinueRail'
-import type { ReadingRailKind } from '../components/home/ReadingCardMenu'
 import { DiscoverZone, type HomeSeparation } from '../components/home/HomeZones'
 import { OfflineHome } from '../components/home/OfflineHome'
 import { AnimeResumeExpandModal, AnimeResumeRail } from '../components/home/AnimeResumeRail'
 import { ReadingWeeks, ReadingWeeksPlaceholder, rollingWeeks } from '../components/home/ReadingWeeks'
 import { RecentlyAddedRail } from '../components/home/RecentlyAddedRail'
-import { DiscoverRailRow, EngineRailRow } from '../components/ui/DiscoverRail'
+import { DiscoverRailRow, EngineRailRow, type OpenItem } from '../components/ui/DiscoverRail'
+import { ANIME_SOURCE, OTHER_SOURCE, homeSectionSource, type ShortlistSource } from '../api/shortlist'
 import { EmptyState } from '../components/ui/EmptyState'
 import { PageHeader } from '../components/ui/PageHeader'
 import { RailSkeleton } from '../components/ui/RailSkeleton'
 import { SectionHeader, SectionTagContext } from '../components/ui/SectionHeader'
 import { SurfaceFrame } from '../components/ui/SurfaceFrame'
+import { SectionErrorBoundary } from '../components/SectionErrorBoundary'
 import { useConnectivity } from '../lib/connectivity'
 import { pwaSupported, workerControlsPage } from '../lib/pwa/serviceWorker'
 import { useOfflineChapters } from '../pwa/offlineChapters'
 
-/** How many catalogue picks each borrowed Discover rail shows before "Find more". */
+/** How many catalogue picks each borrowed Discover rail shows before "Show more". */
 const RAIL_SIZE = 20
 
-function FindMore() {
+/** Opens the rail's own longer list, the same place Discover's "Show more" for that rail goes. */
+function ShowMoreLink({ to, state }: { to: string; state?: { catalogueSeed: CatalogueSeed } }) {
   return (
-    <Button
-      component={Link}
-      to="/discover"
-      variant="subtle"
-      size="compact-sm"
-    >
-      <Trans>Find more</Trans>
+    <Button component={Link} to={to} state={state} variant="subtle" size="compact-sm">
+      <Trans>Show more</Trans>
     </Button>
   )
 }
 
 /** Sections that only ever show series already in the library. Everything else draws on the catalogue. */
-const LIBRARY_SECTIONS: HomeSectionKey[] = ['continue', 'jumpback', 'recent']
+const LIBRARY_SECTIONS: HomeSectionKey[] = ['continue', 'recent']
 
 export default function HomePage({ separation = 'none' }: { separation?: HomeSeparation }) {
   const { t } = useLingui()
   const {
-    data: series,
+    data: libraryKnown,
     error: seriesError,
     isLoading: seriesLoading,
     isError: seriesFailed,
     refetch: refetchSeries,
-  } = useSeries()
+  } = useHasLibrary()
   const connectivity = useConnectivity()
   const { records: offlineRecords } = useOfflineChapters()
   const { data: metadata } = useMetadataSettings()
@@ -107,7 +103,7 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
   // settings load stops the Discover tab flickering in and out. Here it would fire two requests
   // that 400 on an install with no local MangaBaka database, and both surface as error toasts.
   const discoverAvailable = Boolean(metadata?.dumpPresent)
-  const hasLibrary = (series?.length ?? 0) > 0
+  const hasLibrary = libraryKnown ?? false
 
   const { data: homeRails, isError: railsFailed } = useCustomRails('home')
 
@@ -133,7 +129,7 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
   // The glance is Continue reading's own switch, so it costs no request while that section is off.
   const glanceOn = on('continue') && optionOn('continue', 'glance')
 
-  const needsReading = on('continue') || on('jumpback')
+  const needsReading = on('continue')
   const needsDiscover = discoverAvailable && hasLibrary
 
   const {
@@ -154,6 +150,12 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
 
   const seriesIdFor = useSeriesIdLookup()
   const [detailItem, setDetailItem] = useState<RecommendationItem | null>(null)
+  const [detailSource, setDetailSource] = useState<ShortlistSource>(OTHER_SOURCE)
+  const openDetail = useCallback<OpenItem>((item, source) => {
+    setDetailItem(item)
+    setDetailSource(source ?? OTHER_SOURCE)
+  }, [])
+  const openFromAnime = useCallback((item: RecommendationItem) => openDetail(item, ANIME_SOURCE), [openDetail])
   const [fromAnimeExpanded, setFromAnimeExpanded] = useState(false)
   const navigate = useNavigate()
 
@@ -168,10 +170,27 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
   }, [connectivity, refetchSeries])
 
   const continueReading = reading?.continueReading ?? []
-  const jumpBackIn = reading?.jumpBackIn ?? []
 
   const popular = rails?.find((r) => r.key === 'popular')?.items ?? []
-  const youMightLike = recommendations.data?.pages[0]?.similar?.slice(0, RAIL_SIZE) ?? []
+  // Memoized so the rail's memo holds when something unrelated re-renders the page.
+  const similar = recommendations.data?.pages[0]?.similar
+  const youMightLike = useMemo(() => similar?.slice(0, RAIL_SIZE) ?? [], [similar])
+
+  // The glance belongs to Continue reading: in its hero when that draws one, a strip at its slot
+  // otherwise. Without read tracking every day would read as missed, so it waits for that.
+  // Memoized because the hero card is: a fresh element each render would re-render it every time.
+  const glanceHosted = heroOn('continue') && continueReading.length > 0
+  const glanceLoading = glanceOn && readTracking && (progressLoading || (progress?.enabled === true && heatmapLoading))
+  // A brand-new reader would get a card of zeros, so the glance waits for the first day read.
+  const glanceNode = useMemo(
+    () =>
+      glanceOn && readTracking && progress?.enabled && heatmap && rollingWeeks(heatmap).daysRead > 0 ? (
+        <ReadingWeeks days={heatmap} summary={progress} hosted={glanceHosted} />
+      ) : glanceLoading ? (
+        <ReadingWeeksPlaceholder hosted={glanceHosted} />
+      ) : null,
+    [glanceOn, readTracking, progress, heatmap, glanceHosted, glanceLoading],
+  )
 
   // Home has no visible title row: the sidebar says where you are and the hero says what you are
   // reading. The h1 stays for screen readers. Editing the layout is a mode with its own exit, so
@@ -222,7 +241,7 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
   }
 
   // A refetch that failed while the list is still in memory is not a failure to load: draw from it.
-  const libraryMissing = !seriesLoading && seriesFailed && !series
+  const libraryMissing = !seriesLoading && seriesFailed && libraryKnown === undefined
 
   if (libraryMissing && (isOfflineUnavailable(seriesError) || connectivity === 'offline')) {
     return (
@@ -276,7 +295,8 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
     return (
       <SurfaceFrame width="full" pageStyle="editorial">
         {homeTitle}
-        <RailSkeleton title />
+        {/* Home ships opening on the Continue reading hero, so that is the likeliest first shape. */}
+        <ContinueHeroSkeleton />
         <RailSkeleton title />
       </SurfaceFrame>
     )
@@ -284,23 +304,11 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
 
   const visible = layout.filter(sectionVisible)
 
-  // The glance belongs to Continue reading: in its hero when that draws one, a strip at its slot
-  // otherwise. Without read tracking every day would read as missed, so it waits for that.
-  const glanceHosted = heroOn('continue') && continueReading.length > 0
-  const glanceLoading = glanceOn && readTracking && (progressLoading || (progress?.enabled === true && heatmapLoading))
-  // A brand-new reader would get a card of zeros, so the glance waits for the first day read.
-  const glanceNode =
-    glanceOn && readTracking && progress?.enabled && heatmap && rollingWeeks(heatmap).daysRead > 0 ? (
-      <ReadingWeeks days={heatmap} summary={progress} hosted={glanceHosted} />
-    ) : glanceLoading ? (
-      <ReadingWeeksPlaceholder hosted={glanceHosted} />
-    ) : null
-
   // One node per section key. Rendered in the user's order below; a section with nothing to show
   // yields null and takes up no space, exactly as when it is switched off.
   const sections: Record<HomeSectionKey, React.ReactNode> = {
     continue: readingLoading ? (
-      <RailSkeleton />
+      heroOn('continue') ? <ContinueHeroSkeleton queue={queueOf('continue')} /> : <RailSkeleton />
     ) : readingFailed ? (
       <ReadingErrorPrompt onRetry={() => void refetchReading()} />
     ) : continueReading.length > 0 ? (
@@ -308,22 +316,18 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
         {/* Without a hero to ride in, the glance is a strip above the rail. */}
         {!heroOn('continue') && glanceNode}
         {!heroOn('continue') && (
-          <SectionHeader icon={IconPlayerPlay} title={t`Continue reading`} count={continueReading.length} />
+          <SectionHeader icon={IconBook} title={t`Continue reading`} count={continueReading.length} />
         )}
-        <ReadingSection
-          items={continueReading}
-          rail="continue"
-          hero={heroOn('continue')}
-          glance={heroOn('continue') ? glanceNode : undefined}
-          queue={queueOf('continue')}
-        />
+        {heroOn('continue') ? (
+          <ContinueHero items={continueReading} glance={glanceNode} queue={queueOf('continue')} />
+        ) : (
+          <ContinueRail items={continueReading} />
+        )}
       </>
     ) : (
       <>
         {glanceNode}
-        {/* Only nudge when there is genuinely nothing to resume *and* nothing to jump back into,
-            otherwise a user mid-way through their library gets told to start reading. */}
-        {jumpBackIn.length === 0 && <StartReadingPrompt tracking={readTracking} />}
+        <StartReadingPrompt tracking={readTracking} />
       </>
     ),
 
@@ -334,26 +338,6 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
         <>
           <SectionHeader icon={IconBookmarks} title={t`Recently added`} count={recent.length} />
           <RecentlyAddedRail items={recent} />
-        </>
-      )
-    ),
-
-    jumpback: readingLoading ? (
-      <RailSkeleton />
-    ) : readingFailed ? (
-      on('continue') ? null : <ReadingErrorPrompt onRetry={() => void refetchReading()} />
-    ) : (
-      jumpBackIn.length > 0 && (
-        <>
-          {!heroOn('jumpback') && (
-            <SectionHeader icon={IconBook} title={t`Jump back in`} count={jumpBackIn.length} />
-          )}
-          <ReadingSection
-            items={jumpBackIn}
-            rail="jumpback"
-            hero={heroOn('jumpback')}
-            queue={queueOf('jumpback')}
-          />
         </>
       )
     ),
@@ -374,11 +358,11 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
             }
             chevron
           />
-          <AnimeResumeRail items={fromAnime.items} onOpen={setDetailItem} />
+          <AnimeResumeRail items={fromAnime.items} onOpen={openFromAnime} />
           <AnimeResumeExpandModal
             opened={fromAnimeExpanded}
             onClose={() => setFromAnimeExpanded(false)}
-            onOpen={setDetailItem}
+            onOpen={openFromAnime}
           />
         </>
       )
@@ -389,7 +373,7 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
         enabled={needsDiscover && on('following')}
         limit={RAIL_SIZE}
         seriesIdFor={seriesIdFor}
-        onOpen={setDetailItem}
+        onOpen={openDetail}
         onShowMore={(rail) => navigate('/discover', { state: { expandFollowing: rail } })}
       />
     ),
@@ -399,8 +383,13 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
     ) : (
       youMightLike.length > 0 && (
         <>
-          <SectionHeader icon={IconSparkles} title={t`You might like`} action={<FindMore />} chevron />
-          <EngineRailRow items={youMightLike} seriesIdFor={seriesIdFor} onOpen={setDetailItem} />
+          <SectionHeader icon={IconCompass} title={t`You might like`} action={<ShowMoreLink to="/discover/recommended" />} chevron />
+          <EngineRailRow
+            items={youMightLike}
+            seriesIdFor={seriesIdFor}
+            onOpen={openDetail}
+            savedFrom={homeSectionSource('recommended')}
+          />
         </>
       )
     ),
@@ -410,11 +399,15 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
     ) : (
       popular.length > 0 && (
         <>
-          <SectionHeader icon={IconFlame} title={t`Currently popular`} action={<FindMore />} chevron />
+          <SectionHeader icon={IconFlame} title={t`Currently popular`}
+            action={<ShowMoreLink to="/add" state={{ catalogueSeed: { sort: 'popular', filters: {} } }} />}
+            chevron
+          />
           <DiscoverRailRow
             items={popular.slice(0, RAIL_SIZE)}
             seriesIdFor={seriesIdFor}
-            onOpen={setDetailItem}
+            onOpen={openDetail}
+            savedFrom={homeSectionSource('popular')}
           />
         </>
       )
@@ -428,7 +421,7 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
     if (!isRailKey(key)) return sections[key]
     const rail = homeRails?.find((r) => r.id === railIdOf(key))
     if (!rail || (rail.spec.source !== 'library' && !discoverAvailable)) return null
-    return <CustomRailSection rail={rail} limit={RAIL_SIZE} onOpen={setDetailItem} />
+    return <CustomRailSection rail={rail} limit={RAIL_SIZE} onOpen={openDetail} />
   }
 
   const inLibraryZone = (key: HomeLayoutKey) =>
@@ -437,7 +430,8 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
       : LIBRARY_SECTIONS.includes(key)
 
   const rendered = visible.map((s) => ({ key: s.key, node: renderSection(s.key), library: inLibraryZone(s.key) }))
-  const plain = (r: (typeof rendered)[number]) => <Fragment key={r.key}>{r.node}</Fragment>
+  // One bad rail payload takes down its own section, not the page.
+  const plain = (r: (typeof rendered)[number]) => <SectionErrorBoundary key={r.key}>{r.node}</SectionErrorBoundary>
   const catalogue = rendered.filter((r) => !r.library)
 
   const body =
@@ -447,7 +441,7 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
           plain(r)
         ) : (
           <SectionTagContext.Provider key={r.key} value={t`Not in your library`}>
-            {r.node}
+            <SectionErrorBoundary>{r.node}</SectionErrorBoundary>
           </SectionTagContext.Provider>
         ),
       )
@@ -496,33 +490,13 @@ export default function HomePage({ separation = 'none' }: { separation?: HomeSep
         inLibrarySeriesId={detailItem ? seriesIdFor(detailItem) : null}
         rootFolders={rootFolders}
         onClose={() => setDetailItem(null)}
+        savedFrom={detailSource}
       />
     </SurfaceFrame>
   )
 }
 
-/** A reading list as a hero with a Next up strip under it, or as a plain rail. */
-function ReadingSection({
-  items,
-  rail,
-  hero,
-  glance,
-  queue,
-}: {
-  items: HomeReadingItem[]
-  rail: ReadingRailKind
-  hero: boolean
-  glance?: React.ReactNode
-  queue: HeroQueue
-}) {
-  return hero ? (
-    <ContinueHero items={items} rail={rail} glance={glance} queue={queue} />
-  ) : (
-    <ContinueRail items={items} rail={rail} />
-  )
-}
-
-/** Shown in place of the reading rails when `/home/reading` itself failed, rather than the start-reading nudge. */
+/** Shown in place of the reading list when `/home/reading` itself failed, rather than the start-reading nudge. */
 function ReadingErrorPrompt({ onRetry }: { onRetry: () => void }) {
   const { t } = useLingui()
   return (

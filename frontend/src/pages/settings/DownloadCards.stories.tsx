@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, waitFor, within } from 'storybook/test'
+import { expect, fn, waitFor, within } from 'storybook/test'
 import { http, HttpResponse } from 'msw'
 import { settingsMsw } from '../../../.storybook/mocks/settings'
 import { api, failWith } from '../../../.storybook/mocks/api'
@@ -43,7 +43,7 @@ type Story = StoryObj<typeof meta>
 export const DownloadQueue: Story = {
   play: async ({ canvas }) => {
     await waitFor(() => expect(canvas.getByRole('textbox', { name: 'Concurrent chapter downloads' })).toHaveValue('2'))
-    await waitFor(() => expect(canvas.getByRole('textbox', { name: 'Give up on a chapter after (minutes)' })).toHaveValue('120'))
+    await waitFor(() => expect(canvas.getByRole('textbox', { name: 'Time limit per chapter' })).toHaveValue('120'))
     await expect(canvas.queryByText('Unsaved')).toBeNull()
   },
 }
@@ -61,7 +61,19 @@ export const DownloadQueueEditShowsSave: Story = {
   },
 }
 
+const onDownloadSave = fn()
+
 export const DownloadQueueSave: Story = {
+  parameters: {
+    msw: settingsMsw(
+      http.put(api('/settings/download'), async ({ request }) => {
+        const body = await request.json()
+        onDownloadSave(body)
+        return HttpResponse.json(body)
+      }),
+    ),
+  },
+  beforeEach: () => onDownloadSave.mockClear(),
   play: async ({ canvas, userEvent }) => {
     const field = await canvas.findByRole('textbox', { name: 'Concurrent chapter downloads' })
     await waitFor(() => expect(field).toHaveValue('2'))
@@ -69,6 +81,8 @@ export const DownloadQueueSave: Story = {
     await userEvent.type(field, '3')
     await userEvent.click(await canvas.findByRole('button', { name: 'Save' }))
     await expect(await within(document.body).findByText('Saved')).toBeVisible()
+    // The edited field goes out and every other setting rides along unchanged.
+    await waitFor(() => expect(onDownloadSave).toHaveBeenCalledWith({ ...downloadSettings, concurrentChapters: 3 }))
   },
 }
 
@@ -92,7 +106,7 @@ export const DownloadQueueNoTimeout: Story = {
     msw: settingsMsw(http.get(api('/settings/download'), () => HttpResponse.json({ ...downloadSettings, itemTimeoutMinutes: 0, bulkHoldThreshold: 0 }))),
   },
   play: async ({ canvas }) => {
-    const timeout = await canvas.findByRole('textbox', { name: 'Give up on a chapter after (minutes)' })
+    const timeout = await canvas.findByRole('textbox', { name: 'Time limit per chapter' })
     await waitFor(() => expect(timeout).toHaveValue('0'))
   },
 }
@@ -286,7 +300,7 @@ export const VolumeReleases: Story = {
   play: async ({ canvas }) => {
     const search = await canvas.findByRole('switch', { name: /^Search torrents for volume releases/ })
     await waitFor(() => expect(search).toBeChecked())
-    await waitFor(() => expect(canvas.getByRole('textbox', { name: 'Auto-grab size limit (MB)' })).toHaveValue('500'))
+    await waitFor(() => expect(canvas.getByRole('textbox', { name: 'Auto-grab size limit' })).toHaveValue('500 MB'))
   },
 }
 
@@ -345,6 +359,6 @@ export const IndexerSwitchBackend: Story = {
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByLabelText('Indexer', { selector: 'input' }))
     await userEvent.click(await within(document.body).findByRole('option', { name: 'Jackett' }))
-    await expect(await canvas.findByText(/Saving switches the indexer to Jackett/)).toBeVisible()
+    await expect(await canvas.findByText(/Save to switch to Jackett/)).toBeVisible()
   },
 }

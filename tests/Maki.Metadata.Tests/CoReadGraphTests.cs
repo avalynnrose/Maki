@@ -63,7 +63,7 @@ public class CoReadGraphTests : IDisposable
         var graph = await Load((1, 2, 0.0125f));
 
         var node = Node(graph!, 1);
-        Assert.Equal(0.0125f, graph!.WeightsAt(node)[0], 5);
+        Assert.Equal(0.0125f, graph!.EdgesAt(node).Weight(0), 5);
     }
 
     [Fact]
@@ -139,6 +139,21 @@ public class CoReadGraphTests : IDisposable
 
         Assert.Equal(2L, strongest[5]);
         Assert.Equal(1L, strongest[4]);
+    }
+
+    [Fact]
+    public async Task SeedsForListsEverySupportingSeedStrongestFirst()
+    {
+        var graph = await Load((1, 5, 0.6f), (2, 5, 0.3f), (3, 5, 0.2f), (1, 4, 0.4f));
+        var weights = new Dictionary<long, double> { [1] = 0.5, [2] = 2.0, [3] = 1.0 };
+        var strongest = new Dictionary<long, long>();
+        CoReadScorer.Score(graph!, [1L, 2L, 3L], weights, CoReadTuning.Default, strongest);
+
+        var seeds = CoReadScorer.SeedsFor(graph!, [1L, 2L, 3L], weights, CoReadTuning.Default, new HashSet<long> { 5 });
+
+        Assert.Equal([2L, 1L, 3L], seeds[5]);
+        Assert.Equal(strongest[5], seeds[5][0]);
+        Assert.DoesNotContain(4L, seeds.Keys);
     }
 
     [Fact]
@@ -245,7 +260,12 @@ public class CoReadGraphTests : IDisposable
         var neither = EmbeddingMath.HybridScore(0.5, 0, 0, false, 0, 0, 0.5, w);
         var both = EmbeddingMath.HybridScore(0.5, 0, 0, false, 0, 0, 0.5, w, 1.0, 1.0);
 
-        Assert.Equal(1.0, both - neither, 5);
+        var graphOnly = EmbeddingMath.HybridScore(0.5, 0, 0, false, 0, 0, 0.5, w, 1.0, 0);
+        var coReadOnly = EmbeddingMath.HybridScore(0.5, 0, 0, false, 0, 0, 0.5, w, 0, 1.0);
+
+        Assert.True(graphOnly > neither);
+        Assert.True(coReadOnly > neither);
+        Assert.Equal((graphOnly - neither) + (coReadOnly - neither), both - neither, 5);
     }
 
     [Fact]
@@ -301,12 +321,11 @@ public class CoReadGraphTests : IDisposable
 
     private static long[] Neighbours(PairGraphIndex graph, long id)
     {
-        var node = Node(graph, id);
-        var neighbours = graph.NeighboursAt(node);
-        var ids = new long[neighbours.Length];
-        for (var i = 0; i < neighbours.Length; i++)
+        var edges = graph.EdgesAt(Node(graph, id));
+        var ids = new long[edges.Length];
+        for (var i = 0; i < edges.Length; i++)
         {
-            ids[i] = graph.IdAt(neighbours[i]);
+            ids[i] = graph.IdAt(edges.Neighbour(i));
         }
 
         return ids;

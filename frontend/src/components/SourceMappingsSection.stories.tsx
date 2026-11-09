@@ -3,6 +3,7 @@ import { expect, waitFor, within } from 'storybook/test'
 import { http, HttpResponse } from 'msw'
 import { api, failWith, hoursAgo } from '../../.storybook/mocks/api'
 import { mappingsFor, seriesMsw, sourceOrderFor } from '../../.storybook/mocks/series'
+import { settingsHandlers } from '../../.storybook/mocks/settings'
 import type { ScoutSnapshot, SourceOrderDto } from '../api/upgrades'
 import { SourceMappingsSection } from './SourceMappingsSection'
 
@@ -142,6 +143,46 @@ export const LinkSourceSearch: Story = {
   },
 }
 
+/** A pasted address no source knows: an admin is offered to set the site up right here. */
+export const PastedUrlNoSourceKnows: Story = {
+  parameters: {
+    msw: seriesMsw(
+      http.get(api('/search/resolvesource'), () =>
+        failWith(404, 'No source recognizes that URL.', 'error.search.noSourceRecognizesUrl')),
+      ...settingsHandlers,
+    ),
+  },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    const body = within(canvasElement.ownerDocument.body)
+    const open = await canvas.findByRole('button', { name: /link source/i })
+    await waitFor(() => expect(open).toBeEnabled())
+    await userEvent.click(open)
+    const dialog = await body.findByRole('dialog', { name: 'Link a source' })
+    const field = within(dialog).getByRole('textbox', { name: 'Search or paste a series URL' })
+    await userEvent.clear(field)
+    await userEvent.type(field, 'https://quietpen.example/series/blue/')
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Set up this site as a source' }))
+    await expect(await body.findByRole('textbox', { name: 'Series page' })).toHaveValue('https://quietpen.example/series/blue/')
+  },
+}
+
 export const MappingsFailToLoad: Story = {
   parameters: { msw: seriesMsw(http.get(api('/sourcemapping'), () => failWith(500))) },
+}
+
+/** The id and the last check sit behind the row's chevron; the id can still be copied there. */
+export const RowDetails: Story = {
+  play: async ({ canvas, userEvent }) => {
+    await canvas.findByText('MangaDex')
+    await expect(canvas.queryByText(/Chapters last checked|Chapters never checked/)).toBeNull()
+    const toggle = await canvas.findByRole('button', { name: 'Details for MangaDex' })
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'false'))
+    await userEvent.click(toggle)
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
+    await expect(await canvas.findByText('Source ID')).toBeVisible()
+    await expect(await canvas.findByText(/Chapters last checked|Chapters never checked/)).toBeVisible()
+    await expect(await canvas.findByRole('button', { name: /copy/i })).toBeInTheDocument()
+    await userEvent.click(toggle)
+    await expect(canvas.queryByText('Source ID')).toBeNull()
+  },
 }

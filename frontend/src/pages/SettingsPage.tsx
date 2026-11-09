@@ -16,6 +16,7 @@ import { NetworkSection, OidcSection, SecuritySection, SignInPageSection } from 
 import { UsersSection } from '../components/settings/UsersSection'
 import { ReadingProfilesSection } from '../components/settings/ReadingProfilesSection'
 import { ProgressSection } from '../components/settings/ProgressSection'
+import { RatingPromptsSection } from '../components/settings/RatingPromptsSection'
 import { QualityFormatsSection, UpgradeProfilesSection } from '../components/settings/UpgradeProfilesSection'
 import { useCompleteSetup } from '../api/hooks'
 import { useReaderUsed } from '../api/reader'
@@ -43,6 +44,7 @@ import {
   RootFoldersSection,
 } from './settings/LibraryCards'
 import { PageConversionSection } from './settings/PageConversionSection'
+import { UpscalingSection } from './settings/UpscalingSection'
 import {
   DownloadQueueSection,
   FlareSolverrCard,
@@ -87,6 +89,7 @@ function useSectionNodes(): Record<string, ReactNode> {
 
       reader: <ReadingProfilesSection />,
       progress: <ProgressSection />,
+      'rating-prompts': <RatingPromptsSection />,
       opds: <OpdsSection />,
       'koreader-sync': <KoreaderSyncSection />,
       'offline-reading': <OfflineReadingSection />,
@@ -97,6 +100,7 @@ function useSectionNodes(): Record<string, ReactNode> {
       'name-parsing': <NameParsingSection />,
       'library-files': <LibraryFilesSection />,
       'page-conversion': <PageConversionSection />,
+      upscaling: <UpscalingSection />,
       'recycle-bin': <RecycleBinSection />,
       monitoring: <NewSeriesDefaultsSection />,
       metadata: <MetadataSection />,
@@ -257,7 +261,6 @@ export default function SettingsPage() {
           isAdmin && (
             <Button
               variant="default"
-              size="xs"
               loading={completeSetup.isPending}
               onClick={() => completeSetup.mutate(false)}
             >
@@ -289,9 +292,6 @@ export default function SettingsPage() {
               <div className="settings-layout">
                 <SettingsJump entries={tabEntries} />
                 <Stack className="settings-content" gap="xl">
-                  <Text size="sm" c="var(--ink-3)">
-                    {renderLabel(tab.description)}
-                  </Text>
                   {tabEntries.map((entry) => (
                     <div key={entry.id} id={`setting-${entry.id}`} className="settings-entry">
                       {sectionNodes[entry.id]}

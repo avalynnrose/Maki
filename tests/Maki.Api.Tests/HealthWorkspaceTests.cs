@@ -307,10 +307,10 @@ public class HealthWorkspaceTests : IDisposable
         try
         {
             Directory.CreateDirectory(Path.Combine(real,"Series"));
-            if(!TestLinks.TryLinkDirectory(linkedRoot,real)) return;
+            Assert.True(TestLinks.TryLinkDirectory(linkedRoot,real));
             Assert.Equal(Path.Combine(linkedRoot,"one.cbz"),HealthPaths.Resolve(linkedRoot,"one.cbz"));
             var inner=Path.Combine(real,"escape");
-            if(!TestLinks.TryLinkDirectory(inner,outside)) return;
+            Assert.True(TestLinks.TryLinkDirectory(inner,outside));
             Assert.Throws<InvalidOperationException>(()=>HealthPaths.Resolve(linkedRoot,"escape/one.cbz"));
         }
         finally
@@ -339,6 +339,24 @@ public class HealthWorkspaceTests : IDisposable
         Assert.True((await db.HealthFiles.SingleAsync()).Removed);
         Assert.DoesNotContain(db.HealthFindings,f=>f.State=="open");
         Assert.DoesNotContain(db.HealthFindings,f=>f.Kind=="missing");
+    }
+    [Fact] public async Task A_full_scan_retires_rows_of_a_root_that_no_longer_exists_and_clears_the_duplicate_on_the_twin()
+    {
+        // A series moved to another root before its rows followed it, then the old root deleted:
+        // the stranded row keeps the file's hash, so the file's new row reads as its duplicate.
+        using var db=fixture.NewContext();var file=await Seed(db,true);
+        var stranded=new HealthFile{RootFolderId=file.RootFolderId+100,RelativePath="one.cbz",Status="complete",ContentHash=file.ContentHash,VerifiedVersion=file.VerifiedVersion,AnalyzerVersion=file.AnalyzerVersion};
+        db.HealthFiles.Add(stranded);await db.SaveChangesAsync();
+        db.HealthFindings.Add(new HealthFinding{FileId=stranded.Id,Version=stranded.Version,Kind="duplicate",MessageKey="health.finding.duplicate"});
+        db.HealthFindings.Add(new HealthFinding{FileId=file.Id,Version=file.Version,Kind="duplicate",MessageKey="health.finding.duplicate"});
+        var scan=new HealthScan();db.HealthScans.Add(scan);await db.SaveChangesAsync();
+        await new HealthScanService(db).RunAsync(scan,default);
+        db.ChangeTracker.Clear();
+        Assert.Equal("completed",scan.Status);
+        Assert.True((await db.HealthFiles.SingleAsync(f=>f.Id==stranded.Id)).Removed);
+        Assert.False((await db.HealthFiles.SingleAsync(f=>f.Id==file.Id)).Removed);
+        Assert.DoesNotContain(db.HealthFindings,f=>f.FileId==stranded.Id&&f.State=="open");
+        Assert.DoesNotContain(db.HealthFindings,f=>f.Kind=="duplicate"&&f.State=="open");
     }
     [Fact] public async Task A_scan_still_reports_a_linked_archive_that_is_gone_from_disk()
     {
@@ -407,6 +425,7 @@ public class HealthWorkspaceTests : IDisposable
             db.ReaderBookmarks.Add(new(){UserId=userId,SeriesId=chapters[0].SeriesId,ChapterId=chapters[0].Id,PageIndex=4});
             db.ChapterProgress.Add(new(){UserId=userId,SeriesId=chapters[0].SeriesId,ChapterId=chapters[0].Id,PageIndex=4,PageCount=5,Completed=true,ReadSeconds=120});
         }
+        db.ChapterNotes.Add(new(){AuthorId=other,SeriesId=chapters[0].SeriesId,ChapterId=chapters[0].Id,PageIndex=4,Body="page four"});
         await db.SaveChangesAsync();SeedKoreaderId(chapters[0].ChapterFileId!.Value);var op=await Stage(db,file);var service=Operations(db);
         await Assert.ThrowsAnyAsync<InvalidOperationException>(()=>service.ApplyAsync(op.Id,file.Version,true,false,default));
         Assert.True(File.Exists(Path.Combine(root,"one.cbz")));
@@ -414,6 +433,8 @@ public class HealthWorkspaceTests : IDisposable
         Assert.Equal("completed",op.Status);Assert.Equal(2,await db.ChapterFiles.CountAsync());Assert.Empty(db.ReaderBookmarks);
         Assert.All(db.ChapterProgress,p=>{Assert.Equal(0,p.PageIndex);Assert.True(p.Completed);Assert.Equal(120,p.ReadSeconds);});
         Assert.True(chapters[0].Wanted);Assert.False(chapters[1].Wanted);Assert.Empty(db.StatsEvents);
+        // A note outlives the reset, but its page no longer means anything.
+        var note=Assert.Single(db.ChapterNotes.AsNoTracking());Assert.Equal(chapters[0].Id,note.ChapterId);Assert.Null(note.PageIndex);
         // The pages moved, so a copy of the old archive on a device no longer reads true.
         Assert.Empty(db.KoreaderDocuments.AsNoTracking());
     }

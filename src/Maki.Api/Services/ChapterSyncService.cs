@@ -2,6 +2,9 @@ using System.Globalization;
 using Maki.Core.Configuration;
 using Maki.Core.Entities;
 using Maki.Core.Http;
+using Maki.Core.Inbox;
+using Maki.Core.Notifications;
+using Maki.Core.Parsing;
 using Maki.Core.Releases;
 using Maki.Core.Sources;
 using Maki.Data;
@@ -26,11 +29,21 @@ public class ChapterSyncService(
     IAppSettings appSettings,
     ILogger<ChapterSyncService> logger,
     AnimeResumePendingService? animeResumePending = null,
-    PendingReadImportService? pendingReadImports = null)
+    PendingReadImportService? pendingReadImports = null,
+    CbzLinkService? cbzLinks = null,
+    ChapterListingSchedule? listingSchedule = null,
+    InboxService? inbox = null)
 {
     /// <returns>Ids of newly discovered chapters.</returns>
     public Task<List<int>> SyncSeriesAsync(int seriesId, CancellationToken ct = default) =>
-        SyncSeriesAsync(seriesId, mappingIds: null, ct);
+        SyncSeriesAsync(seriesId, mappingIds: null, ChapterListingDepth.Full, ct);
+
+    /// <summary>
+    /// A full sync that may list a newest-first source only up to its first page of known chapters
+    /// (<see cref="ChapterListingDepth.NewestFirst"/>). Such a listing is merged, never replaces.
+    /// </summary>
+    public Task<List<int>> SyncSeriesAsync(int seriesId, ChapterListingDepth depth, CancellationToken ct = default) =>
+        SyncSeriesAsync(seriesId, mappingIds: null, depth, ct);
 
     /// <summary>
     /// Refreshes only the selected mappings. Used to populate missing cleanup snapshots without
@@ -38,10 +51,47 @@ public class ChapterSyncService(
     /// </summary>
     public Task<List<int>> SyncMappingsAsync(
         int seriesId, IReadOnlyCollection<int> mappingIds, CancellationToken ct = default) =>
-        SyncSeriesAsync(seriesId, mappingIds.ToHashSet(), ct);
+        SyncSeriesAsync(seriesId, mappingIds.ToHashSet(), ChapterListingDepth.Full, ct);
 
     private async Task<List<int>> SyncSeriesAsync(
-        int seriesId, HashSet<int>? mappingIds, CancellationToken ct)
+        int seriesId, HashSet<int>? mappingIds, ChapterListingDepth depth, CancellationToken ct)
+    {
+        // Two syncs of one series would both see a new chapter as missing and both insert it.
+        List<int> newChapterIds;
+        bool rescanVolumeEntries;
+        int delistedWithFiles;
+        int rootFolderId;
+        using (await SeriesLocks.SeriesAsync(seriesId, ct))
+        {
+            (newChapterIds, rescanVolumeEntries, delistedWithFiles, rootFolderId) =
+                await SyncUnderLockAsync(seriesId, mappingIds, depth, ct);
+        }
+
+        if (delistedWithFiles > 0 && inbox is not null)
+        {
+            inbox.Raise(InboxEventType.ChapterDelisted, new InboxMessage(
+                    Key: "inbox.chapters.delisted",
+                    Params: InboxMessage.Args(new { count = delistedWithFiles }),
+                    Level: NotificationLevel.Warning,
+                    SeriesId: seriesId,
+                    Url: $"/series/{seriesId}"),
+                InboxAudience.SeriesTrackers(seriesId, rootFolderId));
+        }
+
+        // A volume entry's file belongs to the chapters a source has just listed for that volume.
+        // Handed over here rather than at the next rescan, or the monitored refresh queues them for
+        // download while their file is on disk. The rescan takes the series lock itself.
+        if (rescanVolumeEntries)
+        {
+            var withRoot = await db.Series.Include(s => s.RootFolder).FirstAsync(s => s.Id == seriesId, ct);
+            await cbzLinks!.RescanSeriesAsync(withRoot, ct);
+        }
+
+        return newChapterIds;
+    }
+
+    private async Task<(List<int> NewChapterIds, bool RescanVolumeEntries, int DelistedWithFiles, int RootFolderId)> SyncUnderLockAsync(
+        int seriesId, HashSet<int>? mappingIds, ChapterListingDepth depth, CancellationToken ct)
     {
         var series = await db.Series
             .Include(s => s.SourceMappings)
@@ -61,6 +111,7 @@ public class ChapterSyncService(
         var skipSpecials = await appSettings.GetAsync(SettingKeys.MonitoringUnmonitorSpecials, ct) == "true";
         var newChapters = new List<Chapter>();
         var numbersBySource = new Dictionary<string, IReadOnlyCollection<decimal?>>();
+        var anyPartialListing = false;
         var promotedBesideExisting = false;
 
         // MangaBaka has no MangaDex ids, so the uuid can only come from a linked
@@ -71,10 +122,13 @@ public class ChapterSyncService(
         // A globally switched-off source counts as disabled here without its per-series
         // mappings being touched, so re-enabling it brings back the user's own layout.
         var disabledSources = await sourceAvailability.DisabledAsync(ct);
-        var liveMappings = series.SourceMappings
+        var enabledMappings = series.SourceMappings
             .Where(m => m.Enabled && !disabledSources.Contains(m.SourceName, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+        var liveMappings = enabledMappings
             .Where(m => mappingIds is null || mappingIds.Contains(m.Id))
             .ToList();
+        var listedBefore = ListedByDelistingMappings(existing, enabledMappings);
 
         foreach (var mapping in liveMappings)
         {
@@ -87,11 +141,20 @@ public class ChapterSyncService(
 
             try
             {
+                // Read before the snapshot changes: what the mapping listed until now decides which
+                // of its new links are releases and which are a catalogue arriving all at once.
+                var firstSnapshot = mapping.ChapterSnapshotAt is null && mapping.ChapterLinks.Count == 0;
+                // What a mapping lists for the first time since a restore was released while the series
+                // was archived. Decided per mapping, so one failing source keeps it for its own next sync.
+                var firstSinceRestore = series.RestoredAt is { } restoredAt &&
+                                        (mapping.ChapterSnapshotAt is null || mapping.ChapterSnapshotAt < restoredAt);
+
                 // Uncached on purpose: a refresh has to see the site as it is now. Seeding the
                 // shared cache with the result is what keeps the enqueues that a monitored refresh
                 // fires immediately afterwards from resolving against an older listing, which would
                 // report the chapter this pass just discovered as "not listed".
-                var sourceChapters = (await source.ListChaptersAsync(mapping.SourceSeriesId, mapping.LanguageFilter, ct))
+                var listing = await ListAsync(source, mapping, depth, firstSnapshot || firstSinceRestore, ct);
+                var sourceChapters = listing.Chapters
                     .Select(ChapterIdentity.Labelled)
                     .ToList();
                 if (sourceChapters.Count == 0 && mapping.ChapterLinks.Count > 0)
@@ -108,13 +171,22 @@ public class ChapterSyncService(
                     mapping.AnnouncedNextReleaseAt = announcing.AnnouncedNextRelease(mapping.SourceSeriesId);
                 }
 
-                // Read before the snapshot changes: what the mapping listed until now decides which
-                // of its new links are releases and which are a catalogue arriving all at once.
-                var firstSnapshot = mapping.ChapterSnapshotAt is null && mapping.ChapterLinks.Count == 0;
                 var listedUpTo = mapping.ChapterLinks.Max(l => l.Chapter?.Number);
 
-                chapterLists.Store(source, mapping.SourceSeriesId, mapping.LanguageFilter, sourceChapters);
-                numbersBySource[mapping.SourceName] = sourceChapters.Select(sc => sc.Number).ToList();
+                if (listing.Complete)
+                {
+                    chapterLists.Store(source, mapping.SourceSeriesId, mapping.LanguageFilter, sourceChapters);
+                    numbersBySource[mapping.SourceName] = sourceChapters.Select(sc => sc.Number).ToList();
+                }
+                else
+                {
+                    // Only the newest pages: the cache would serve it as the whole list, and the clash
+                    // check reads what the mapping links plus what this listing added.
+                    anyPartialListing = true;
+                    numbersBySource[mapping.SourceName] = mapping.ChapterLinks.Select(l => l.Chapter?.Number)
+                        .Concat(sourceChapters.Select(sc => sc.Number))
+                        .ToList();
+                }
                 var snapshotLinks = new Dictionary<Chapter, SourceChapter>();
 
                 foreach (var sc in sourceChapters)
@@ -179,7 +251,8 @@ public class ChapterSyncService(
 
                 var fileGroups = ReplaceSnapshot(
                     mapping, snapshotLinks, ChapterFileQualityService.SiteGroup(source),
-                    firstSnapshot ? null : listedUpTo ?? decimal.MinValue);
+                    firstSnapshot || firstSinceRestore ? null : listedUpTo ?? decimal.MinValue,
+                    removeUnlisted: listing.Complete);
                 await BackfillFileGroupsAsync(mapping.SourceName, fileGroups, ct);
 
                 mapping.LastRefresh = DateTime.UtcNow;
@@ -216,6 +289,9 @@ public class ChapterSyncService(
             await MergeDuplicatesAsync(existing, reads, ct);
         }
 
+        await DropUnlistedLockedAsync(seriesId, existing, reads, ct);
+        var delistedWithFiles = MarkDelisted(existing, enabledMappings, listedBefore);
+
         // Flag (or clear) cross-source numbering clashes. A clash is always
         // recorded; clearing requires every enabled mapping to have fetched this
         // run, so one temporarily failing source doesn't wipe a real flag.
@@ -225,7 +301,7 @@ public class ChapterSyncService(
         {
             var clash = NumberingClashDetector.Detect(numbersBySource);
             var value = clash is null ? null : $"{clash.SubChapterSource}|{clash.WholeChapterSource}";
-            var allFetched = numbersBySource.Count == liveMappings.Count;
+            var allFetched = numbersBySource.Count == liveMappings.Count && !anyPartialListing;
             if (value is not null || allFetched)
             {
                 if (value != series.NumberingClash)
@@ -257,8 +333,104 @@ public class ChapterSyncService(
             await pendingReadImports.ApplyAsync(seriesId, ct);
         }
 
-        return newChapters.Select(c => c.Id).ToList();
+        return (newChapters.Select(c => c.Id).ToList(),
+            newChapters.Count > 0 && cbzLinks is not null && existing.Any(Chapter.IsVolumeEntry),
+            delistedWithFiles, series.RootFolderId);
     }
+
+    /// <summary>
+    /// Chapters a live mapping links whose losing the link would mean something. Links from a source
+    /// that only lists a free window, or from a mapping whose language filter just changed (snapshot
+    /// voided while its links still describe the old filter), are expected to go.
+    /// </summary>
+    private HashSet<int> ListedByDelistingMappings(List<Chapter> existing, List<SourceMapping> enabledMappings)
+    {
+        var delisting = enabledMappings
+            .Where(m => !(m.ChapterSnapshotAt is null && m.ChapterLinks.Count > 0))
+            .Where(m => sourceRegistry.Find(m.SourceName) is not { } source ||
+                        !source.Capabilities.HasFlag(SourceCapabilities.FreeWindowListing))
+            .Select(m => m.Id)
+            .ToHashSet();
+        return existing
+            .Where(c => c.Id != 0 && c.SourceLinks.Any(l =>
+                db.Entry(l).State != EntityState.Deleted && delisting.Contains(l.SourceMappingId)))
+            .Select(c => c.Id)
+            .ToHashSet();
+    }
+
+    /// <summary>
+    /// Stamps <see cref="Chapter.DelistedAt"/> on chapters that lost their last live link in this sync
+    /// and clears it on any chapter a live mapping links. Decided once after every mapping has synced,
+    /// so a chapter one source dropped and another picked up in the same pass is never stamped.
+    /// </summary>
+    /// <returns>How many chapters it newly stamped that have a file.</returns>
+    private int MarkDelisted(List<Chapter> existing, List<SourceMapping> enabledMappings, HashSet<int> listedBefore)
+    {
+        var now = DateTime.UtcNow;
+        var withFiles = 0;
+        foreach (var chapter in existing.Where(c => c.Id != 0))
+        {
+            var linked = chapter.SourceLinks.Any(l =>
+                db.Entry(l).State != EntityState.Deleted &&
+                enabledMappings.Any(m => ReferenceEquals(m, l.SourceMapping) || m.Id == l.SourceMappingId));
+            if (linked)
+            {
+                chapter.DelistedAt = null;
+            }
+            else if (chapter.DelistedAt is null && listedBefore.Contains(chapter.Id))
+            {
+                chapter.DelistedAt = now;
+                if (chapter.ChapterFileId is not null)
+                {
+                    withFiles++;
+                }
+            }
+        }
+
+        if (withFiles > 0)
+        {
+            logger.LogInformation("{Count} downloaded chapter(s) of series {SeriesId} are no longer listed by any source",
+                withFiles, existing[0].SeriesId);
+        }
+
+        return withFiles;
+    }
+
+    /// <summary>
+    /// The mapping's listing: only the newest pages when the caller allows it, the source pages
+    /// newest first, the mapping already has a snapshot and its whole list was walked within
+    /// <see cref="ChapterListingSchedule.FullEvery"/>; the whole list otherwise.
+    /// </summary>
+    private async Task<ChapterListing> ListAsync(
+        ISource source, SourceMapping mapping, ChapterListingDepth depth, bool freshSnapshot, CancellationToken ct)
+    {
+        if (source is INewestFirstChapterSource newest && listingSchedule is not null &&
+            depth == ChapterListingDepth.NewestFirst && !freshSnapshot && mapping.ChapterLinks.Count > 0 &&
+            !listingSchedule.FullDue(mapping.Id))
+        {
+            var newestPages = await newest.ListNewChaptersAsync(mapping.SourceSeriesId, mapping.LanguageFilter,
+                KnownChaptersOf(mapping), ct);
+            if (newestPages is { Complete: true, Chapters.Count: > 0 })
+            {
+                listingSchedule.Walked(mapping.Id);
+            }
+
+            return newestPages;
+        }
+
+        var chapters = await source.ListChaptersAsync(mapping.SourceSeriesId, mapping.LanguageFilter, ct);
+        if (source is INewestFirstChapterSource && chapters.Count > 0)
+        {
+            listingSchedule?.Walked(mapping.Id);
+        }
+
+        return new ChapterListing(chapters, Complete: true);
+    }
+
+    internal static KnownChapters KnownChaptersOf(SourceMapping mapping) =>
+        new(mapping.ChapterLinks.Where(l => l.SourceChapterId.Length > 0).Select(l => l.SourceChapterId),
+            mapping.ChapterLinks.Where(l => l.Chapter is not null)
+                .Select(l => (l.Chapter!.Number, l.Volume, l.Chapter.Language)));
 
     /// <summary>
     /// Sets when <c>RefreshMonitoredSeriesJob</c> next picks this series up. Runs after every full
@@ -295,11 +467,16 @@ public class ChapterSyncService(
     /// adds later is not a release.
     /// </param>
     /// <returns>The group each linked chapter's file should carry, by ChapterFile id.</returns>
+    /// <param name="removeUnlisted">
+    /// False for a listing that stopped at the newest pages: it adds and updates links and removes
+    /// none, since the chapters it did not reach are still on the site.
+    /// </param>
     private Dictionary<int, string> ReplaceSnapshot(
         SourceMapping mapping,
         IReadOnlyDictionary<Chapter, SourceChapter> snapshot,
         string? groupFallback,
-        decimal? arrivalsAbove)
+        decimal? arrivalsAbove,
+        bool removeUnlisted = true)
     {
         var arrivals = new List<ChapterSourceLink>();
         var fileGroups = new Dictionary<int, string>();
@@ -307,7 +484,7 @@ public class ChapterSyncService(
         var retainedChapterIds = snapshot.Keys.Where(c => c.Id != 0).Select(c => c.Id).ToHashSet();
 
         foreach (var stale in mapping.ChapterLinks
-                     .Where(l => l.ChapterId != 0 && !retainedChapterIds.Contains(l.ChapterId))
+                     .Where(l => removeUnlisted && l.ChapterId != 0 && !retainedChapterIds.Contains(l.ChapterId))
                      .ToList())
         {
             db.ChapterSourceLinks.Remove(stale);
@@ -454,7 +631,14 @@ public class ChapterSyncService(
                 keeper.Title ??= dup.Title;
                 keeper.ReleaseDate ??= dup.ReleaseDate;
                 keeper.ChapterFileId ??= dup.ChapterFileId;
-                keeper.FileRemovedAt ??= dup.FileRemovedAt;
+                if (keeper.FileRemovedAt is null)
+                {
+                    keeper.FileRemovedAt = dup.FileRemovedAt;
+                    keeper.FileAutoRemoved = dup.FileAutoRemoved;
+                }
+
+                keeper.DelistedAt ??= dup.DelistedAt;
+
                 keeper.Wanted |= dup.Wanted;
                 await reads.MoveAsync(dup, keeper, ct);
 
@@ -498,13 +682,57 @@ public class ChapterSyncService(
     }
 
     /// <summary>
-    /// Every reader's progress and bookmarks on the series, loaded only once a merge needs them.
+    /// Locked and preview rows synced before sources stopped listing them (Suwayomi's 🔒, 💴 and
+    /// "(Preview)" labels). Once no source links one, it can never be fetched and only inflates the
+    /// series' chapter count. A row with a file, a removed file, a reader, a note or a live download stays.
+    /// </summary>
+    private async Task DropUnlistedLockedAsync(int seriesId, List<Chapter> existing, ReadRows reads, CancellationToken ct)
+    {
+        var candidates = existing
+            .Where(c => c.Id != 0 && c.ChapterFileId is null && c.FileRemovedAt is null &&
+                        ChapterAccessReader.Of(c.NumberRaw) != ChapterAccess.Free &&
+                        c.SourceLinks.All(l => db.Entry(l).State == EntityState.Deleted))
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var ids = candidates.Select(c => (int?)c.Id).ToList();
+        var downloading = await db.DownloadQueue
+            .Where(q => ids.Contains(q.ActiveChapterId))
+            .Select(q => q.ActiveChapterId!.Value)
+            .ToListAsync(ct);
+
+        var dropped = 0;
+        foreach (var chapter in candidates.Where(c => !downloading.Contains(c.Id)))
+        {
+            if (await reads.HasReadsAsync(chapter, ct))
+            {
+                continue;
+            }
+
+            existing.Remove(chapter);
+            db.Chapters.Remove(chapter);
+            dropped++;
+        }
+
+        if (dropped > 0)
+        {
+            logger.LogInformation("Removed {Count} locked or preview chapter(s) no source lists from series {SeriesId}",
+                dropped, seriesId);
+        }
+    }
+
+    /// <summary>
+    /// Every reader's progress, bookmarks and notes on the series, loaded only once a merge needs them.
     /// Unfiltered, since a sync started from one user's request must not drop another user's reads.
     /// </summary>
     private sealed class ReadRows(MakiDbContext db, int seriesId)
     {
         private List<ChapterProgress>? _progress;
         private List<ReaderBookmark>? _bookmarks;
+        private List<ChapterNote>? _notes;
 
         /// <summary>Whether one row can absorb the other without dropping a file or a reader's progress.</summary>
         public async Task<bool> CanMergeAsync(Chapter a, Chapter b, CancellationToken ct)
@@ -524,6 +752,11 @@ public class ChapterSyncService(
             return !progress.Any(p => p.ChapterId == b.Id && readersOfA.Contains(p.UserId));
         }
 
+        public async Task<bool> HasReadsAsync(Chapter chapter, CancellationToken ct) =>
+            (await ProgressAsync(ct)).Any(p => p.ChapterId == chapter.Id) ||
+            (await BookmarksAsync(ct)).Any(b => b.ChapterId == chapter.Id) ||
+            (await NotesAsync(ct)).Any(n => n.ChapterId == chapter.Id);
+
         public async Task MoveAsync(Chapter from, Chapter to, CancellationToken ct)
         {
             if (from.Id == 0 || to.Id == 0)
@@ -536,9 +769,7 @@ public class ChapterSyncService(
                 row.ChapterId = to.Id;
             }
 
-            var bookmarks = _bookmarks ??= await db.ReaderBookmarks.IgnoreQueryFilters()
-                .Where(b => b.SeriesId == seriesId)
-                .ToListAsync(ct);
+            var bookmarks = await BookmarksAsync(ct);
             foreach (var mark in bookmarks.Where(b => b.ChapterId == from.Id).ToList())
             {
                 // The same page bookmarked on both rows: the keeper's copy already covers it.
@@ -547,7 +778,22 @@ public class ChapterSyncService(
                     mark.ChapterId = to.Id;
                 }
             }
+
+            foreach (var note in (await NotesAsync(ct)).Where(n => n.ChapterId == from.Id))
+            {
+                note.ChapterId = to.Id;
+            }
         }
+
+        private async Task<List<ReaderBookmark>> BookmarksAsync(CancellationToken ct) =>
+            _bookmarks ??= await db.ReaderBookmarks.IgnoreQueryFilters()
+                .Where(b => b.SeriesId == seriesId)
+                .ToListAsync(ct);
+
+        private async Task<List<ChapterNote>> NotesAsync(CancellationToken ct) =>
+            _notes ??= await db.ChapterNotes.IgnoreQueryFilters()
+                .Where(n => n.SeriesId == seriesId)
+                .ToListAsync(ct);
 
         private async Task<List<ChapterProgress>> ProgressAsync(CancellationToken ct) =>
             _progress ??= await db.ChapterProgress.IgnoreQueryFilters()

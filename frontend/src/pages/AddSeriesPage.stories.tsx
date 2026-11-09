@@ -57,7 +57,7 @@ export const FromDiscoverFeed: Story = {
     },
   },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByRole('button', { name: 'Filters (1)' })).toBeVisible()
+    await expect(await canvas.findByRole('button', { name: 'Filters 1' })).toBeVisible()
     await expect(await canvas.findByText('Browsing the catalogue')).toBeVisible()
   },
 }
@@ -341,7 +341,9 @@ export const ListView: Story = {
   play: async ({ canvas, userEvent }) => {
     await canvas.findByRole('button', { name: 'View and add Iron Petal Academy' })
     await userEvent.click(await canvas.findByLabelText('List view'))
-    await expect(await canvas.findByRole('button', { name: /^Iron Petal Academy/ })).toBeVisible()
+    await waitFor(() =>
+      expect(canvas.getByRole('button', { name: 'View and add Iron Petal Academy' })).toHaveClass('discover-row-action'),
+    )
   },
 }
 
@@ -360,7 +362,7 @@ export const RequestInsteadOfAdd: Story = {
   play: async ({ canvas }) => {
     await expect(await canvas.findByRole('heading', { name: 'Request series' })).toBeVisible()
     await expect(
-      await canvas.findByText('Browse or search MangaBaka and ask an admin for a title. You can ask for a chapter range too.'),
+      await canvas.findByText('Ask an admin for a series or a chapter range.'),
     ).toBeVisible()
   },
 }

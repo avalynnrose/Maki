@@ -35,6 +35,66 @@ public class LibraryPathsTests
     }
 
     [Fact]
+    public void IsSameFile_tells_a_case_only_spelling_from_a_second_file()
+    {
+        var root = Directory.CreateTempSubdirectory("maki-same-file-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "chainsaw man"));
+            var lower = Path.Combine(root, "chainsaw man", "x.cbz");
+            var upper = Path.Combine(root, "Chainsaw Man", "X.cbz");
+            File.WriteAllText(lower, "a");
+            File.WriteAllText(Path.Combine(root, "chainsaw man", "y.cbz"), "a");
+
+            Assert.True(LibraryPaths.IsSameFile(lower, lower));
+            Assert.False(LibraryPaths.IsSameFile(lower, Path.Combine(root, "chainsaw man", "y.cbz")));
+            if (File.Exists(upper))
+            {
+                // Case-insensitive filesystem: both spellings open the one file.
+                Assert.True(LibraryPaths.IsSameFile(lower, upper));
+            }
+            else
+            {
+                Directory.CreateDirectory(Path.Combine(root, "Chainsaw Man"));
+                File.WriteAllText(upper, "a");
+                Assert.False(LibraryPaths.IsSameFile(lower, upper));
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsSameFile_tells_apart_files_whose_folders_differ_in_case_at_two_levels()
+    {
+        var root = Directory.CreateTempSubdirectory("maki-same-file-deep-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "Foo", "Bar"));
+            if (Directory.Exists(Path.Combine(root, "foo")))
+            {
+                // Case-insensitive filesystem: there cannot be a second tree to tell apart.
+                return;
+            }
+
+            Directory.CreateDirectory(Path.Combine(root, "foo", "bar"));
+            var upper = Path.Combine(root, "Foo", "Bar", "x.cbz");
+            var lower = Path.Combine(root, "foo", "bar", "x.cbz");
+            File.WriteAllText(upper, "a");
+            File.WriteAllText(lower, "a");
+
+            Assert.False(LibraryPaths.IsSameDirectory(Path.Combine(root, "Foo", "Bar"), Path.Combine(root, "foo", "bar")));
+            Assert.False(LibraryPaths.IsSameFile(upper, lower));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Resolve_reads_a_backslash_as_a_separator_on_every_host()
     {
         var root = Directory.CreateTempSubdirectory("maki-library-paths-").FullName;
@@ -72,17 +132,12 @@ public class LibraryPathsTests
     // platform separator between its arguments and never touches what's already inside them.
     // LibraryPaths.Resolve runs the join through Path.GetFullPath, which normalizes every separator
     // in the result to the platform's own; this is what the display path is built from now.
-    [Fact]
+    // The bug only exists on Windows: Path.Combine there always inserts '\', so a root path stored
+    // with '/' produces a mixed result. On Linux the platform separator is '/' already, so a root
+    // path typed with '/' was never mixed to begin with.
+    [WindowsFact]
     public void Resolve_normalizes_a_root_path_saved_with_the_wrong_separator_style()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            // The bug only exists on Windows: Path.Combine there always inserts '\', so a root
-            // path stored with '/' produces a mixed result. On Linux the platform separator is
-            // '/' already, so a root path typed with '/' was never mixed to begin with.
-            return;
-        }
-
         var result = LibraryPaths.Resolve("C:/library/manga", "My Series (2017)");
 
         Assert.Equal(@"C:\library\manga\My Series (2017)", result);
@@ -149,10 +204,7 @@ public class LibraryPathsTests
             Directory.CreateDirectory(Path.Combine(root, "Series"));
             File.WriteAllText(Path.Combine(outside, "ch1.cbz"), "external");
             File.WriteAllText(Path.Combine(root, "Series", "ch2.cbz"), "inside");
-            if (!TestLinks.TryLinkDirectory(link, outside))
-            {
-                return;
-            }
+            Assert.True(TestLinks.TryLinkDirectory(link, outside));
 
             var through = Path.Combine("Series", "linked", "ch1.cbz");
             Assert.NotNull(LibraryPaths.Resolve(root, through));
@@ -180,10 +232,7 @@ public class LibraryPathsTests
         try
         {
             Directory.CreateDirectory(Path.Combine(real, "Series"));
-            if (!TestLinks.TryLinkDirectory(root, real))
-            {
-                return;
-            }
+            Assert.True(TestLinks.TryLinkDirectory(root, real));
 
             var path = LibraryPaths.ResolveNoLinks(root, "Series");
             Assert.NotNull(path);
@@ -197,20 +246,20 @@ public class LibraryPathsTests
         }
     }
 
-    [Theory]
+    [Fact]
+    public void Resolve_never_returns_the_root_itself() => AssertNeverTheRoot(".");
+
+    // Only Windows trims trailing dots and spaces; elsewhere "..." is an ordinary name.
+    [WindowsTheory]
     [InlineData("...")]
     [InlineData("....")]
     [InlineData(". .")]
     [InlineData("... ")]
-    [InlineData(".")]
-    public void Resolve_never_returns_the_root_itself(string relative)
-    {
-        // Only Windows trims trailing dots and spaces; elsewhere "..." is an ordinary name.
-        if (!OperatingSystem.IsWindows() && relative != ".")
-        {
-            return;
-        }
+    public void Resolve_never_returns_the_root_for_a_name_Windows_trims_to_nothing(string relative) =>
+        AssertNeverTheRoot(relative);
 
+    private static void AssertNeverTheRoot(string relative)
+    {
         var root = Path.Combine(Path.GetTempPath(), "maki-root");
         Assert.Null(LibraryPaths.Resolve(root, relative));
         Assert.Null(LibraryPaths.Resolve(root + Path.DirectorySeparatorChar, relative));
@@ -227,10 +276,7 @@ public class LibraryPathsTests
             Directory.CreateDirectory(Path.Combine(root, "Series", "Volume 1"));
             File.WriteAllText(Path.Combine(outside, "ch1.cbz"), "external");
             Assert.False(LibraryPaths.ContainsLink(Path.Combine(root, "Series")));
-            if (!TestLinks.TryLinkDirectory(link, outside))
-            {
-                return;
-            }
+            Assert.True(TestLinks.TryLinkDirectory(link, outside));
 
             Assert.True(LibraryPaths.ContainsLink(Path.Combine(root, "Series")));
             Assert.Null(LibraryPaths.ResolveForDelete(root, Path.Combine("Series", "Volume 1", "linked", "ch1.cbz")));

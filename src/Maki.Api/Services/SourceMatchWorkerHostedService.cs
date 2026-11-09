@@ -154,6 +154,7 @@ public class SourceMatchWorkerHostedService(
             var db = scope.ServiceProvider.GetRequiredService<MakiDbContext>();
 
             var pending = await db.Series
+                .Active()
                 .Where(s => s.SourceMatchPending || s.PendingImportLink != PendingImportLink.None)
                 .Select(s => new { s.Id, s.SourceMatchPending, s.PendingImportLink })
                 .ToListAsync(ct);
@@ -240,9 +241,16 @@ public class SourceMatchWorkerHostedService(
                     await sync.SyncSeriesAsync(series.Id, ct);
                 }
 
-                await scope.ServiceProvider.GetRequiredService<SourceScoutService>()
+                var scouting = await scope.ServiceProvider.GetRequiredService<SourceScoutService>()
                     .StartIfEnabledAsync(db, series.Id, ct);
                 await SearchVolumesFirstAsync(scope.ServiceProvider, series.Id, ct);
+
+                // A scout triggers Smart Download when it finishes; without one the first batch can go now.
+                if (!scouting && series.MonitorNewItems == NewChapterMonitorMode.Smart &&
+                    scope.ServiceProvider.GetService<ISchedulerFactory>() is { } schedulerFactory)
+                {
+                    await SmartDownloadJob.TriggerAsync(schedulerFactory, logger);
+                }
             }
         }
         catch (Exception ex)

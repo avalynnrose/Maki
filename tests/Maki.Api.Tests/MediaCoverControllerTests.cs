@@ -1,5 +1,6 @@
 using Maki.Api.Configuration;
 using Maki.Api.Controllers;
+using Maki.Api.Services;
 using Maki.Core.Security;
 using Maki.Data.Identity;
 using Microsoft.AspNetCore.Http;
@@ -14,20 +15,16 @@ namespace Maki.Api.Tests;
 /// the instance one URL away from any account — including one granted a single root folder — and no
 /// other test would notice, because the leak is in what the controller *doesn't* do.
 /// </summary>
-[Collection(ConfigDirCollection.Name)]
 public class MediaCoverControllerTests : IDisposable
 {
     private readonly TestDb _db = new();
     private readonly string _configDir;
-    private readonly string? _priorEnv;
     private readonly AppPaths _paths;
 
     public MediaCoverControllerTests()
     {
         _configDir = Path.Combine(Path.GetTempPath(), "maki-mediacover-tests", Guid.NewGuid().ToString("N"));
-        _priorEnv = Environment.GetEnvironmentVariable("MAKI_CONFIG_DIR");
-        Environment.SetEnvironmentVariable("MAKI_CONFIG_DIR", _configDir);
-        _paths = new AppPaths();
+        _paths = new AppPaths(_configDir);
     }
 
     [Fact]
@@ -61,6 +58,19 @@ public class MediaCoverControllerTests : IDisposable
         Assert.IsType<PhysicalFileResult>(await Controller(admin, allRootFolders: true).Cover(ungranted, default));
     }
 
+    [Fact]
+    public async Task ServesTheSmallCoverUnderTheSameVisibilityRule()
+    {
+        var (granted, ungranted, reader) = Seed();
+        File.WriteAllBytes(Path.Combine(_paths.MediaCoverDir, granted.ToString(), "cover-sm.jpg"), [0xFF, 0xD8, 0xFF]);
+
+        var controller = Controller(reader);
+        var served = Assert.IsType<PhysicalFileResult>(await controller.SmallCover(granted, default));
+        Assert.EndsWith("cover-sm.jpg", served.FileName);
+        Assert.Equal("private, max-age=31536000, immutable", controller.Response.Headers.CacheControl.ToString());
+        Assert.IsType<NotFoundResult>(await Controller(reader).SmallCover(ungranted, default));
+    }
+
     /// <summary>
     /// Two series in two root folders, a cover file on disk for each, and a reader granted only the
     /// first. <c>SeedSeries</c> creates a root folder per call, so the two are genuinely separate.
@@ -90,7 +100,8 @@ public class MediaCoverControllerTests : IDisposable
     }
 
     private MediaCoverController Controller(int userId, bool allRootFolders = false) =>
-        new(_paths, _db.NewContext(userId, allRootFolders), null!, null!, new TestCurrentUser(userId), new TestLocalizer(), null!,
+        new(_paths, _db.NewContext(userId, allRootFolders),
+            new CoverService(null!, _paths, new FakeAppSettings(), NullLogger<CoverService>.Instance), null!, new TestCurrentUser(userId), new TestLocalizer(), null!,
             NullLogger<MediaCoverController>.Instance)
         {
             // The action sets a response header, which needs a real HttpContext behind it.
@@ -100,7 +111,6 @@ public class MediaCoverControllerTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        Environment.SetEnvironmentVariable("MAKI_CONFIG_DIR", _priorEnv);
         try { Directory.Delete(_configDir, recursive: true); } catch (IOException) { }
     }
 }

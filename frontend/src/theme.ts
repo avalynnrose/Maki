@@ -2,21 +2,28 @@ import {
   Badge,
   Button,
   Card,
+  type CollapseProps,
+  type ComboboxProps,
   type CSSVariablesResolver,
-  Drawer,
+  type DrawerProps,
   type MantineColorScheme,
   type MantineColorsTuple,
   type MantineThemeOverride,
-  Modal,
+  type MantineTransition,
+  type ModalProps,
   Notification,
   Pagination,
   Paper,
+  type PopoverProps,
+  type SegmentedControlProps,
   Table,
+  type TooltipProps,
   type VariantColorsResolver,
   createTheme,
   defaultVariantColorsResolver,
 } from '@mantine/core'
 import type { ReactNode } from 'react'
+import { DUR, EASE_CSS, pacedMs } from './lib/motion'
 
 const ModalPassthrough = ({ children }: { children?: ReactNode }) => children
 
@@ -274,12 +281,25 @@ const primaryShades = new Map<MantineColorsTuple, { light: number; dark: number 
  */
 const variantColorResolver: VariantColorsResolver = (input) => {
   const resolved = defaultVariantColorsResolver(input)
-  const isBrand = !input.color || input.color === 'brand' || input.color === input.theme.primaryColor
+  const isBrand =
+    !input.color || input.color === 'brand' || input.color === 'var(--brand)' || input.color === input.theme.primaryColor
   if (input.variant === 'filled' && isBrand) return { ...resolved, color: 'var(--brand-on)' }
+  // The light variant writes in the fill shade, which Emerald and Amber keep too pale for text in Light.
+  if (input.variant === 'light' && isBrand) return { ...resolved, color: 'var(--brand-fg)' }
   // Danger text on its own 10% tint falls just under 4.5:1 in dark.
   if (input.variant === 'light' && input.color === 'var(--danger)') return { ...resolved, color: 'var(--danger-fg)' }
   return resolved
 }
+
+/**
+ * Light-variant badges and buttons write in shade 9 in Light, which misses 4.5:1 on its own tint for
+ * the warmer hues (yellow 2.3:1 on Paper). Each is darkened just enough to clear 4.6:1 on Paper.
+ */
+const lightVariantText = Object.fromEntries(
+  Object.entries({ red: 85, blue: 95, cyan: 90, teal: 85, green: 80, lime: 70, yellow: 65, orange: 75 }).map(
+    ([hue, share]) => [`--mantine-color-${hue}-light-color`, `color-mix(in srgb, var(--mantine-color-${hue}-9) ${share}%, black)`],
+  ),
+)
 
 /**
  * Anchors take `--brand-fg`. Mantine colours them with the primary shade, a fill colour that
@@ -288,7 +308,11 @@ const variantColorResolver: VariantColorsResolver = (input) => {
  */
 export const cssVariablesResolver: CSSVariablesResolver = () => ({
   variables: {},
-  light: { '--mantine-color-anchor': 'var(--brand-fg)', '--mantine-color-text': 'var(--ink)' },
+  light: {
+    '--mantine-color-anchor': 'var(--brand-fg)',
+    '--mantine-color-text': 'var(--ink)',
+    ...lightVariantText,
+  },
   dark: { '--mantine-color-anchor': 'var(--brand-fg)', '--mantine-color-text': 'var(--ink)' },
 })
 
@@ -321,8 +345,14 @@ export function createAppTheme(
     colors: { brand: accent, dark: ground },
     components: {
       ...themeBase.components,
-      Modal: Modal.extend({ defaultProps: { ...modalDefaults, closeButtonProps } }),
-      Drawer: Drawer.extend({ defaultProps: { closeButtonProps, attributes: dialogHeaderAttributes } }),
+      Modal: { defaultProps: (): Partial<ModalProps> => ({ ...modalDefaults(), closeButtonProps }) },
+      Drawer: {
+        defaultProps: (): Partial<DrawerProps> => ({
+          closeButtonProps,
+          attributes: dialogHeaderAttributes,
+          transitionProps: overlayTransition(DUR.medium),
+        }),
+      },
       Notification: Notification.extend({ defaultProps: { closeButtonProps } }),
       Pagination: Pagination.extend({
         defaultProps: paginationLabels && {
@@ -344,7 +374,20 @@ export interface ThemeLabels {
 // Mantine renders dialog headers as <header>, a second banner landmark next to the app shell's.
 const dialogHeaderAttributes = { header: { role: 'presentation' } }
 
-const modalDefaults = {
+/**
+ * Overlays move on the house curve and the token scale (lib/motion.ts) instead of Mantine's stock
+ * `ease`. These defaultProps are functions, which Mantine calls on every render, so a flip of
+ * "Faster animations" reaches the next overlay to open without rebuilding the theme. A
+ * `transitionProps` passed at the call site replaces the whole object, curve included. Combobox
+ * dropdowns (Select, Autocomplete) default to Mantine's 0 ms, so they get the Popover's timing below.
+ */
+const overlayTransition = (seconds: number, transition?: MantineTransition) => ({
+  ...(transition && { transition }),
+  duration: pacedMs(seconds),
+  timingFunction: EASE_CSS,
+})
+
+const modalDefaults = () => ({
   attributes: dialogHeaderAttributes,
   radius: 'lg',
   padding: 'lg',
@@ -358,7 +401,9 @@ const modalDefaults = {
     close: 'utility-modal-close',
     body: 'utility-modal-body',
   },
-}
+  // Mantine's own default names the transition, and this object replaces it rather than merging.
+  transitionProps: overlayTransition(DUR.medium, 'fade-down'),
+})
 
 const themeBase: MantineThemeOverride = {
   primaryColor: 'brand',
@@ -368,7 +413,7 @@ const themeBase: MantineThemeOverride = {
   colors: { brand, dark },
   defaultRadius: 'md',
   fontFamily:
-    '"Onest Variable", Onest, ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    '"Onest Variable", Onest, ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Hiragino Sans", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif',
   fontFamilyMonospace:
     'ui-monospace, "JetBrains Mono", "SFMono-Regular", "Cascadia Code", Menlo, monospace',
   // One step per role: xs is meta, sm is body, matching --type-meta and --type-body in theme.css.
@@ -381,7 +426,7 @@ const themeBase: MantineThemeOverride = {
   },
   headings: {
     fontFamily:
-      '"Bricolage Grotesque Variable", "Onest Variable", ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif',
+      '"Bricolage Grotesque Variable", "Onest Variable", ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif',
     fontWeight: '700',
     sizes: {
       h1: { fontSize: '1.9rem', lineHeight: '1.2', fontWeight: '800' },
@@ -403,6 +448,7 @@ const themeBase: MantineThemeOverride = {
     lg: '0 12px 40px -8px rgba(0,0,0,.6)',
   },
   cursorType: 'pointer',
+  respectReducedMotion: true,
   components: {
     Card: Card.extend({
       defaultProps: { radius: 'lg', withBorder: true },
@@ -426,7 +472,27 @@ const themeBase: MantineThemeOverride = {
      * past the title and the content box could overflow on top of it. The content is a flex column
      * instead and only `.utility-modal-body` scrolls (theme.css).
      */
-    Modal: Modal.extend({ defaultProps: modalDefaults }),
+    Modal: { defaultProps: (): Partial<ModalProps> => modalDefaults() },
+    // Menu and HoverCard render a Popover and inherit this.
+    Popover: { defaultProps: (): Partial<PopoverProps> => ({ transitionProps: overlayTransition(DUR.base) }) },
+    Combobox: { defaultProps: (): Partial<ComboboxProps> => ({ transitionProps: overlayTransition(DUR.base) }) },
+    Tooltip: { defaultProps: (): Partial<TooltipProps> => ({ transitionProps: overlayTransition(DUR.fast) }) },
+    // Off Mantine's stock 200ms `ease` too. Disclosures and the segmented indicator are opened often
+    // enough that slow reads as lag.
+    Collapse: {
+      defaultProps: (): Partial<CollapseProps> => ({
+        transitionDuration: pacedMs(DUR.medium),
+        transitionTimingFunction: EASE_CSS,
+      }),
+    },
+    SegmentedControl: {
+      defaultProps: (): Partial<SegmentedControlProps> => ({
+        transitionDuration: pacedMs(DUR.medium),
+        transitionTimingFunction: EASE_CSS,
+      }),
+    },
+    // Toasts (@mantine/notifications); the curve is set in theme.css, since Mantine puts it inline.
+    Notifications: { defaultProps: () => ({ transitionDuration: pacedMs(DUR.medium) }) },
     Table: Table.extend({
       defaultProps: { verticalSpacing: 'sm', horizontalSpacing: 'md' },
     }),

@@ -96,72 +96,6 @@ public class SuwayomiSourceTests
     }
 
     [Fact]
-    public async Task A_date_the_extension_gives_as_a_chapter_number_is_ignored()
-    {
-        var h = new SuwayomiHarness();
-        h.MangaByUrl(7);
-        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
-            SuwayomiHarness.Chapter(1, "/c/1", "第1話", 1, sourceOrder: 1),
-            SuwayomiHarness.Chapter(2, "/c/2", "SNOW ANGEL 25-26", 20251030, sourceOrder: 2));
-
-        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
-
-        Assert.Equal(2, chapters.Count);
-        Assert.Single(chapters, c => c.Number == 1m);
-        Assert.Single(chapters, c => c.Number is null);
-    }
-
-    [Fact]
-    public async Task A_label_that_names_a_chapter_wins_over_a_number_the_extension_counted_by_position()
-    {
-        var h = new SuwayomiHarness();
-        h.MangaByUrl(7);
-        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
-            SuwayomiHarness.Chapter(1, "/c/1", "第2話①", 3, sourceOrder: 1),
-            SuwayomiHarness.Chapter(2, "/c/2", "第2話②", 4, sourceOrder: 2),
-            SuwayomiHarness.Chapter(3, "/c/3", "第27話-1", 42, sourceOrder: 3),
-            SuwayomiHarness.Chapter(4, "/c/4", "第27話-2", 43, sourceOrder: 4),
-            SuwayomiHarness.Chapter(5, "/c/5", "Ch. 5", 7, sourceOrder: 5));
-
-        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
-
-        Assert.Equal([2.1m, 2.2m, 5m, 27.1m, 27.2m], chapters.Select(c => c.Number).ToArray());
-    }
-
-    [Fact]
-    public async Task Ebook_volume_editions_are_volume_rows_not_chapters()
-    {
-        var h = new SuwayomiHarness();
-        h.MangaByUrl(7);
-        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
-            SuwayomiHarness.Chapter(1, "/c/1", "１【電子限定特典付き】", -1, sourceOrder: 1),
-            SuwayomiHarness.Chapter(2, "/c/2", "２【電子限定特典付き】", 2, sourceOrder: 2),
-            SuwayomiHarness.Chapter(3, "/c/3", "(Volume) 隣のステラ（３）", -1, sourceOrder: 3));
-
-        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
-
-        Assert.All(chapters, c => Assert.Null(c.Number));
-        Assert.Equal([1, 2, 3], chapters.Select(c => c.Volume!.Value).Order().ToArray());
-    }
-
-    [Fact]
-    public async Task A_volume_label_stays_a_volume_whatever_number_the_extension_gives_it()
-    {
-        var h = new SuwayomiHarness();
-        h.MangaByUrl(7);
-        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
-            SuwayomiHarness.Chapter(1, "/c/1", "1巻", 1, sourceOrder: 1),
-            SuwayomiHarness.Chapter(2, "/c/2", "2巻", 2, sourceOrder: 2),
-            SuwayomiHarness.Chapter(3, "/c/3", "第3話", 3, sourceOrder: 3));
-
-        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
-
-        Assert.Equal(3, chapters.Count);
-        Assert.Equal([(null, 1), (null, 2), (3m, null)],
-            chapters.OrderBy(c => c.Volume ?? 99).Select(c => (c.Number, c.Volume)).ToArray());
-    }
-
-    [Fact]
     public async Task A_chapter_the_extension_did_not_number_takes_its_number_from_the_name()
     {
         var h = new SuwayomiHarness();
@@ -170,11 +104,27 @@ public class SuwayomiSourceTests
             SuwayomiHarness.Chapter(1, "/c/1", "第1話: 第1話", -1, sourceOrder: 1),
             SuwayomiHarness.Chapter(2, "/c/2", "ｅｐｉｓｏｄｅ２\u3000ホットケーキ（１）", -1, sourceOrder: 2),
             SuwayomiHarness.Chapter(3, "/c/3", "ｅｐｉｓｏｄｅ２\u3000ホットケーキ（２）", -1, sourceOrder: 3),
-            SuwayomiHarness.Chapter(4, "/c/4", "Special", 7, sourceOrder: 4));
+            SuwayomiHarness.Chapter(4, "/c/4", "Ch. 5", 7, sourceOrder: 4));
 
         var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
 
-        Assert.Equal([1m, 2.1m, 2.2m, 7m], chapters.Select(c => c.Number).ToArray());
+        // Fork deviation: a label that names a chapter wins over the extension's own number (7 here), see NumberOf.
+        Assert.Equal([1m, 2.1m, 2.2m, 5m], chapters.Select(c => c.Number).ToArray());
+    }
+
+    [Fact]
+    public async Task Parts_the_extension_numbered_as_the_whole_chapter_stay_apart()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "第9話(1)", 9, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "第9話(2)", 9, sourceOrder: 2),
+            SuwayomiHarness.Chapter(3, "/c/3", "第10話", 10, sourceOrder: 3));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal([9.1m, 9.2m, 10m], chapters.Select(c => c.Number).ToArray());
     }
 
     [Fact]
@@ -372,6 +322,74 @@ public class SuwayomiSourceTests
         await Assert.ThrowsAsync<ChapterRequiresPurchaseException>(() => h.Source().GetPagesAsync(Chapter("/c/2")));
 
         Assert.Equal(1, h.Server.Count("Pages"));
+    }
+
+    [Theory]
+    [InlineData("Could not load purchase history")]
+    [InlineData("Request to purchase-history.example.test timed out")]
+    [InlineData("Unable to refresh the list of purchased titles")]
+    public async Task An_unrelated_error_that_mentions_a_purchase_is_not_a_purchase_notice(string message)
+    {
+        var h = new SuwayomiHarness();
+        var server = new Uri(SuwayomiHarness.Base);
+        h.Cache.SetManga(server, "100", SeriesUrl, 7);
+        h.Cache.SetChapter(server, 7, "/c/2", 41);
+        h.Server.Ops["ChapterByUrl"] = (_, _) => FakeSuwayomi.Data(new { chapters = new { nodes = new[] { new { id = 41 } } } });
+        h.Server.Ops["Pages"] = (_, _) => FakeSuwayomi.Errors($"Exception while fetching data (/fetchChapterPages) : {message}");
+
+        var ex = await Record.ExceptionAsync(() => h.Source().GetPagesAsync(Chapter("/c/2")));
+
+        Assert.NotNull(ex);
+        Assert.IsNotType<ChapterRequiresPurchaseException>(ex);
+    }
+
+    [Fact]
+    public async Task A_label_that_names_a_chapter_wins_over_a_number_the_extension_counted_by_position()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "第2話①", 3, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "第2話②", 4, sourceOrder: 2),
+            SuwayomiHarness.Chapter(3, "/c/3", "第27話-1", 42, sourceOrder: 3),
+            SuwayomiHarness.Chapter(4, "/c/4", "第27話-2", 43, sourceOrder: 4),
+            SuwayomiHarness.Chapter(5, "/c/5", "Ch. 5", 7, sourceOrder: 5));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal([2.1m, 2.2m, 5m, 27.1m, 27.2m], chapters.Select(c => c.Number).ToArray());
+    }
+
+    [Fact]
+    public async Task Ebook_volume_editions_are_volume_rows_not_chapters()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "１【電子限定特典付き】", -1, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "２【電子限定特典付き】", 2, sourceOrder: 2),
+            SuwayomiHarness.Chapter(3, "/c/3", "(Volume) 隣のステラ（３）", -1, sourceOrder: 3));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.All(chapters, c => Assert.Null(c.Number));
+        Assert.Equal([1, 2, 3], chapters.Select(c => c.Volume!.Value).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task A_date_the_extension_gives_as_a_chapter_number_is_ignored()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "第1話", 1, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "SNOW ANGEL 25-26", 20251030, sourceOrder: 2));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal(2, chapters.Count);
+        Assert.Single(chapters, c => c.Number == 1m);
+        Assert.Single(chapters, c => c.Number is null);
     }
 
     [Fact]

@@ -18,27 +18,28 @@ import {
   VisuallyHidden,
 } from '@mantine/core'
 import {
-  IconCheck,
   IconEye,
   IconEyeOff,
   IconFolders,
   IconFolderSearch,
   IconPackageImport,
   IconSearch,
-} from '@tabler/icons-react'
-import { notifications } from '@mantine/notifications'
+} from '../lib/icons'
+import { notifications } from '../lib/toast'
 import { Plural, Trans, useLingui } from '@lingui/react/macro'
 import { msg, plural } from '@lingui/core/macro'
 import type { MessageDescriptor } from '@lingui/core'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
+import { useAuth } from '../auth/AuthProvider'
 import { useLibrarySettings, useMetadataSettings, useRootFolders } from '../api/hooks'
 import {
   IMPORT_BATCH_SIZE,
   IMPORT_SKIP_REASONS,
   useIgnoreImportFolder,
   useIgnoredImportFolders,
+  type ImportCandidateKind,
   type ImportRequestItem,
 } from '../api/libraryImport'
 import { useHubEvent } from '../api/signalr'
@@ -50,6 +51,7 @@ import { ImportMatchFinder } from '../components/import/ImportMatchFinder'
 import { ImportPlanModal } from '../components/import/ImportPlanModal'
 import { MihonImport } from '../components/import/MihonImport'
 import { RecentImports, UndoBatchButton } from '../components/import/RecentImports'
+import { StepStrip, type Step } from '../components/StepStrip'
 import { EmptyState } from '../components/ui/EmptyState'
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionHeader } from '../components/ui/SectionHeader'
@@ -83,6 +85,8 @@ interface ScanCandidate {
   matches: MetadataSearchResult[]
   /** Set when the folder belongs to a series already in the library that has no files yet. */
   existingSeriesId: number | null
+  /** `restore` is an archived series' folder: importing puts the series back in the library. */
+  kind: ImportCandidateKind
 }
 
 interface ImportResultDto {
@@ -139,8 +143,8 @@ export default function ImportPage() {
         title={t`Import`}
         description={
           mihonMode
-            ? t`Adds the manga in your Mihon library to Maki. Each one is matched to MangaBaka, its categories can become tags, and chapters you have read can be marked as read.`
-            : t`Brings series folders Maki doesn't know yet into the library.`
+            ? t`Adds the manga in your Mihon library to Maki.`
+            : t`Add series folders that Maki does not know about yet.`
         }
       />
       {mihonAvailable && (
@@ -155,7 +159,7 @@ export default function ImportPage() {
             setSearchParams(next, { replace: true })
           }}
         >
-          <Tabs.List mb="md">
+          <Tabs.List>
             <Tabs.Tab value="folders">
               <Trans>Folders</Trans>
             </Tabs.Tab>
@@ -167,42 +171,6 @@ export default function ImportPage() {
       )}
       {mihonMode ? <MihonImport /> : <FolderImport />}
     </SurfaceFrame>
-  )
-}
-
-interface ImportStep {
-  label: string
-  hint: string
-  state: 'todo' | 'current' | 'done'
-}
-
-/**
- * Where the import stands, in the setup wizard's step style laid out across the toolbar: a number
- * that turns into a check, the current step tinted. The second line says what that step holds now
- * (the root scanned, how many are selected, how many imported) rather than repeating its name.
- */
-function ImportSteps({ steps }: { steps: ImportStep[] }) {
-  const { t } = useLingui()
-  return (
-    <ol className="import-steps" aria-label={t`Import progress`}>
-      {steps.map((step, i) => (
-        <li
-          key={step.label}
-          className="import-step"
-          data-state={step.state}
-          aria-current={step.state === 'current' ? 'step' : undefined}
-        >
-          <span className="import-step-index">
-            {step.state === 'done' ? <IconCheck size={13} stroke={2.6} /> : i + 1}
-          </span>
-          <span className="import-step-text">
-            <span className="import-step-label">{step.label}</span>
-            <span className="import-step-hint">{step.hint}</span>
-          </span>
-          {i < steps.length - 1 && <span className="import-step-thread" aria-hidden />}
-        </li>
-      ))}
-    </ol>
   )
 }
 
@@ -225,6 +193,7 @@ function FolderImport() {
   // The run whose results are on screen, which is the batch its Undo button undoes.
   const [lastRunId, setLastRunId] = useState<string | null>(null)
   const queryClient = useQueryClient()
+  const { can } = useAuth()
   const scannedRoot = scannedRootFolderId === null ? null : Number(scannedRootFolderId)
   const { data: ignoredFolders } = useIgnoredImportFolders(scannedRoot)
   const ignoreFolder = useIgnoreImportFolder()
@@ -381,18 +350,23 @@ function FolderImport() {
   const linkingTotal = linkingIds.length
   const linkingDone = linkingIds.filter((id) => linkedSeries[id] !== undefined).length
 
-  const inLibraryCount = candidates?.filter((c) => c.existingSeriesId !== null).length ?? 0
-  const visibleCandidates = candidates?.filter((c) => showInLibrary || c.existingSeriesId === null) ?? null
+  // An archived series is out of the library, so its folder is shown like a new one.
+  const inLibrary = (c: ScanCandidate) => c.existingSeriesId !== null && c.kind !== 'restore'
+  const inLibraryCount = candidates?.filter(inLibrary).length ?? 0
+  const visibleCandidates = candidates?.filter((c) => showInLibrary || !inLibrary(c)) ?? null
   const visibleFolders = new Set(visibleCandidates?.map((c) => c.folderName))
   // A hidden row never imports, even if it was ticked while the toggle was on.
   const selectedItems = Object.entries(selection)
     .filter(([folderName, providerId]) => providerId !== '' && visibleFolders.has(folderName))
     .map(([folderName, metadataProviderId]) => ({ folderName, metadataProviderId }))
   const selectedCount = selectedItems.length
+  const restoresOnly =
+    selectedCount > 0 &&
+    selectedItems.every((i) => candidates?.find((c) => c.folderName === i.folderName)?.kind === 'restore')
 
   const importing = Object.keys(progress).length > 0 || doImport.isPending
   const scannedPath = rootFolders?.find((f) => String(f.id) === scannedRootFolderId)?.path
-  const steps: ImportStep[] = [
+  const steps: Step[] = [
     {
       label: t`Scan`,
       hint: scannedPath ?? t`Pick a root folder and scan it`,
@@ -421,7 +395,7 @@ function FolderImport() {
   return (
     <Stack gap="xl">
       <Panel p="sm" className="import-toolbar">
-        <ImportSteps steps={steps} />
+        <StepStrip steps={steps} label={t`Import progress`} />
         <Group gap="sm" wrap="wrap">
           <Select
             className="import-root-select"
@@ -438,15 +412,20 @@ function FolderImport() {
               if (v !== scannedRootFolderId) clearScan()
             }}
           />
-          <Button
-            variant={candidates && candidates.length > 0 ? 'default' : 'filled'}
-            leftSection={<IconFolderSearch size={16} />}
-            onClick={() => rootFolderId && scan.mutate(Number(rootFolderId))}
-            loading={scan.isPending}
-            disabled={!rootFolderId || doImport.isPending}
-          >
-            <Trans>Scan</Trans>
-          </Button>
+          {/* data-disabled while no root is picked, so the tooltip saying why can still show. */}
+          <Tooltip label={t`Choose a root folder first`} disabled={!!rootFolderId} events={{ hover: true, focus: true, touch: true }}>
+            <Button
+              variant={candidates && candidates.length > 0 ? 'default' : 'filled'}
+              leftSection={<IconFolderSearch size={16} />}
+              onClick={() => rootFolderId && scan.mutate(Number(rootFolderId))}
+              loading={scan.isPending}
+              data-disabled={!rootFolderId || undefined}
+              aria-disabled={!rootFolderId}
+              disabled={doImport.isPending}
+            >
+              <Trans>Scan</Trans>
+            </Button>
+          </Tooltip>
           {candidates && candidates.length > 0 && (
             <Group gap="sm" ml="auto" className="import-toolbar-actions">
               <Button
@@ -483,10 +462,7 @@ function FolderImport() {
         size="lg"
       >
         <Text size="sm" mb="xs">
-          <Trans>
-            Folders are renamed to the English title. Sources are then found in the background, and
-            each series' comic files are linked to chapters as soon as its sources are in.
-          </Trans>
+          <Trans>Folders are renamed to the English title.</Trans>
         </Text>
         <Checkbox
           label={t`Standardize ComicInfo.xml inside the imported files (recommended)`}
@@ -495,14 +471,7 @@ function FolderImport() {
           mb="xs"
         />
         <Text size="xs" c="var(--ink-3)" mb="lg">
-          <Trans>
-            Rewrites the metadata embedded in each CBZ (title, summary, authors, genres, chapter
-            numbers) to Maki's standard so Kavita groups these files with future downloads and
-            imports; PDFs are skipped, since there is nowhere in a PDF to put it. If Kavita
-            already indexed this library, its existing entries may reshuffle; skipping keeps the
-            files byte-for-byte untouched, but they may not group consistently with chapters Maki
-            adds later.
-          </Trans>
+          <Trans>Helps Kavita group these files with later downloads.</Trans>
         </Text>
         <Group justify="flex-end">
           <Button variant="default" onClick={() => setConfirmOpen(false)}>
@@ -525,7 +494,7 @@ function FolderImport() {
               }
             }}
           >
-            <Trans>Import</Trans>
+            {restoresOnly ? <Trans context="series">Restore</Trans> : <Trans>Import</Trans>}
           </Button>
         </Group>
       </Modal>
@@ -632,6 +601,8 @@ function FolderImport() {
 
       {rootFolders && rootFolders.length === 0 ? (
         <EmptyState
+          compact
+          framed
           mood="asking"
           title={t`No root folders yet`}
           description={t`Add a root folder in Settings, then come back to scan it for series to import.`}
@@ -642,9 +613,10 @@ function FolderImport() {
         !visibleCandidates && (
           <EmptyState
             compact
+            framed
             mood="asking"
             title={t`Choose a root folder`}
-            description={t`Scanning finds the series folders in it that Maki doesn't know yet and matches each to metadata. On import every folder is renamed to the English title and its comic files are linked to chapters. Files keep their own names, and a PDF is kept as it is.`}
+            description={t`Scanning finds the series folders Maki doesn't know yet.`}
           />
         )
       )}
@@ -696,6 +668,7 @@ function FolderImport() {
       {visibleCandidates.length === 0 && (
         <EmptyState
           compact
+          framed
           mood="asleep"
           title={t`Nothing to import`}
           description={t`Every folder in this root is already in the library, ignored, or holds no comics.`}
@@ -728,22 +701,39 @@ function FolderImport() {
                   const rowProgress = progress[c.folderName]
                   const { cleanedTitle, comicCount, recognizedCount, folderName } = c
                   const unrecognizedCount = comicCount - recognizedCount
+                  const title = c.matches[0]?.title ?? cleanedTitle
+                  const restoreLabel =
+                    c.kind === 'restore' ? t({ message: `Restore ${title}`, context: 'series' }) : null
+                  const restoreLocked = c.kind === 'restore' && !can('ArchiveSeries')
                   return (
                     <Table.Tr key={c.folderName}>
                       <Table.Td>
-                        <Checkbox
-                          aria-label={t`Import ${folderName}`}
-                          checked={selected !== ''}
-                          disabled={matches.length === 0 || doImport.isPending}
-                          onChange={(e) => {
-                            // Capture before setState: React nulls currentTarget after the handler.
-                            const checked = e.currentTarget.checked
-                            setSelection((s) => ({
-                              ...s,
-                              [c.folderName]: checked ? matches[0]?.providerId ?? '' : '',
-                            }))
-                          }}
-                        />
+                        <Tooltip
+                          label={t({
+                            message: 'Restoring an archived series needs the Archive series permission',
+                            context: 'series',
+                          })}
+                          disabled={!restoreLocked}
+                          multiline
+                          w={240}
+                          withArrow
+                        >
+                          <span style={{ display: 'inline-flex' }}>
+                            <Checkbox
+                              aria-label={restoreLabel ?? t`Import ${folderName}`}
+                              checked={selected !== ''}
+                              disabled={matches.length === 0 || doImport.isPending || restoreLocked}
+                              onChange={(e) => {
+                                // Capture before setState: React nulls currentTarget after the handler.
+                                const checked = e.currentTarget.checked
+                                setSelection((s) => ({
+                                  ...s,
+                                  [c.folderName]: checked ? matches[0]?.providerId ?? '' : '',
+                                }))
+                              }}
+                            />
+                          </span>
+                        </Tooltip>
                       </Table.Td>
                       <Table.Td>
                         <Group gap={4} wrap="nowrap" justify="space-between">
@@ -763,7 +753,7 @@ function FolderImport() {
                                   }
                                   disabled={doImport.isPending}
                                 >
-                                  <IconEye size={14} />
+                                  <IconEye size={16} />
                                 </ActionIcon>
                               </Tooltip>
                             )}
@@ -777,13 +767,17 @@ function FolderImport() {
                                   onClick={() => ignore(c.folderName)}
                                   disabled={doImport.isPending || !!rowProgress}
                                 >
-                                  <IconEyeOff size={14} />
+                                  <IconEyeOff size={16} />
                                 </ActionIcon>
                               </Tooltip>
                             )}
                           </Group>
                         </Group>
-                        {c.existingSeriesId !== null ? (
+                        {restoreLabel ? (
+                          <Badge size="xs" variant="light">
+                            {restoreLabel}
+                          </Badge>
+                        ) : c.existingSeriesId !== null ? (
                           <Badge size="xs" variant="light">
                             <Trans>In library</Trans>
                           </Badge>
@@ -852,7 +846,7 @@ function FolderImport() {
                               <Button
                                 size="xs"
                                 variant="light"
-                                leftSection={<IconSearch size={14} />}
+                                leftSection={<IconSearch size={16} />}
                                 onClick={() => setFinderFor(c)}
                                 disabled={doImport.isPending}
                               >

@@ -1,11 +1,13 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { ReaderPrefs } from '../pages/reader/prefs'
+import type { QualityTierName } from './upgrades'
 import { t } from '@lingui/core/macro'
 import { getConnectivity } from '../lib/connectivity'
 import { randomUUID } from '../lib/uuid'
 import { queueOfflineWrite } from '../pwa/progressQueue'
-import { api, ApiError, authHeaders, getInitialize, trackedFetch } from './client'
+import { api, ApiError, apiRootNow, apiWithOrigin, authHeaders, getInitialize, trackedFetch } from './client'
+import { optimisticMerge } from './optimistic'
 
 export interface ReaderManifest {
   chapterId: number
@@ -42,6 +44,20 @@ export interface ReaderManifest {
   autoProfileId: number | null
   /** Identifies the file behind the pages; page URLs carry it so they can be cached until a re-download. */
   pageVersion: string
+  /** The quality tier of the file behind the pages. Absent on a manifest saved offline before it existed. */
+  tier?: QualityTierName
+  /** Whether the admin turned on server upscaling, and which of its models this reader can pick. Absent on a manifest saved offline before it existed. */
+  enhanceServer?: EnhanceServer
+  /** Visible notes on the chapter, tombstones left out. Absent on a manifest saved offline before it existed. */
+  noteCount?: number
+  /** Zero based pages with at least one visible note, sorted. Absent on a manifest saved offline before it existed. */
+  notedPages?: number[]
+}
+
+export interface EnhanceServer {
+  enabled: boolean
+  /** Model ids as the server knows them, without the `server:` prefix. */
+  models: { id: string; ready: boolean }[]
 }
 
 /** Which layer answered "what does this series look like". Mirrors `ReaderPrefsSource`. */
@@ -90,10 +106,85 @@ export async function pageUrl(chapterId: number, page: number, thumb = false, ve
   return `${init.apiRoot}/reader/chapter/${chapterId}/${kind}/${page}${query}`
 }
 
+/**
+ * `UpscaleCache.Generation` on the server. The enhanced page is kept as immutable, so a pipeline change
+ * only reaches a browser that already has the page when its URL changes. Raise the two together.
+ */
+const ENHANCE_GENERATION = 'g3'
+
+function enhancedUrl(apiRoot: string, chapterId: number, page: number, model: string, pageVersion: string): string {
+  const query = `?model=${encodeURIComponent(model)}&v=${encodeURIComponent(pageVersion)}&g=${ENHANCE_GENERATION}`
+  return `${apiRoot}/reader/chapter/${chapterId}/page/${page}/enhanced${query}`
+}
+
+/** Where a page upscaled on the server is served from. A 404 there means not upscaled yet; it never queues one. */
+export async function serverEnhancedUrl(chapterId: number, page: number, model: string, pageVersion: string): Promise<string> {
+  const init = await getInitialize()
+  return enhancedUrl(init.apiRoot, chapterId, page, model, pageVersion)
+}
+
+/** `serverEnhancedUrl` without the wait, or null while the bootstrap has not loaded. */
+export function serverEnhancedUrlNow(chapterId: number, page: number, model: string, pageVersion: string): string | null {
+  const apiRoot = apiRootNow()
+  return apiRoot === null ? null : enhancedUrl(apiRoot, chapterId, page, model, pageVersion)
+}
+
+export type ServerPageState = 'ready' | 'queued' | 'working' | 'failed' | 'skipped'
+
+// One per tab: the server keeps a queue per session, so two tabs on one account never cancel each other's pages.
+const ENHANCE_SESSION = randomUUID()
+
+/**
+ * Asks the server to upscale a window of pages, current page first. At most 32 are taken, or 1000
+ * with `wholeChapter`; `next` fills whatever room is left with the next chapter's pages, which are
+ * not answered here. `notWanted` names this chapter's pages to drop from what is still queued.
+ * `window` is how many leading `pages` are the reading window, ahead of the whole chapter's rest. A
+ * hidden tab says so, and the server does not count its request as reading.
+ */
+export function requestServerEnhance(
+  chapterId: number,
+  model: string,
+  pages: number[],
+  next: { chapterId: number; pages: number[] } | null = null,
+  wholeChapter = false,
+  notWanted: number[] = [],
+  window = pages.length,
+) {
+  return api<{ pages: { page: number; state: ServerPageState }[] }>(`/reader/chapter/${chapterId}/enhance`, {
+    method: 'POST',
+    body: JSON.stringify({
+      model,
+      pages,
+      ...(next && { nextChapterId: next.chapterId, nextPages: next.pages }),
+      ...(wholeChapter && { wholeChapter, window }),
+      ...(notWanted.length > 0 && { notWanted }),
+      session: ENHANCE_SESSION,
+      visible: document.visibilityState === 'visible',
+    }),
+  })
+}
+
+/** Drops this tab's pending server upscales. `keepalive` lets it go out while the tab closes. */
+export function cancelServerEnhance() {
+  return api<void>(`/reader/enhance?session=${encodeURIComponent(ENHANCE_SESSION)}`, { method: 'DELETE', keepalive: true })
+}
+
+// Chapters whose manifest this tab last got from the device's offline copy rather than the server.
+const offlineManifests = new Set<number>()
+
+export function manifestServedOffline(chapterId: number): boolean {
+  return offlineManifests.has(chapterId)
+}
+
 export function useReaderManifest(chapterId: number) {
   return useQuery({
     queryKey: ['reader-manifest', chapterId],
-    queryFn: () => api<ReaderManifest>(`/reader/chapter/${chapterId}`),
+    queryFn: async () => {
+      const { data, servedOffline } = await apiWithOrigin<ReaderManifest>(`/reader/chapter/${chapterId}`)
+      if (servedOffline) offlineManifests.add(chapterId)
+      else offlineManifests.delete(chapterId)
+      return data
+    },
     enabled: Number.isFinite(chapterId) && chapterId > 0,
     // The reader draws its own failure state, so the global error toast would only double it.
     meta: { silent: true },
@@ -266,6 +357,12 @@ export function useSaveReaderSettings() {
         Partial<Pick<ReaderSettings, 'pullFromKavita'>>,
     ) =>
       api<ReaderSettings>('/settings/reader', { method: 'PUT', body: JSON.stringify(settings) }),
+    ...optimisticMerge(
+      queryClient,
+      ['settings', 'reader'],
+      (settings: Pick<ReaderSettings, 'defaults' | 'pushToKavita'> & Partial<Pick<ReaderSettings, 'pullFromKavita'>>) =>
+        settings,
+    ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['settings', 'reader'] })
     },
@@ -371,6 +468,7 @@ export function useSetChaptersState(seriesId: number) {
       void queryClient.invalidateQueries({ queryKey: ['series', seriesId] })
       void queryClient.invalidateQueries({ queryKey: ['series'] })
       void queryClient.invalidateQueries({ queryKey: ['home'] })
+      void queryClient.invalidateQueries({ queryKey: ['progress'] })
       // Ticking a season off (or back on) can change whether the anime-resume callout has
       // anything left to offer.
       void queryClient.invalidateQueries({ queryKey: ['anime-resume', 'series', seriesId] })
@@ -391,6 +489,7 @@ export function useSetChapterRead(seriesId: number) {
       // Both Home rails are derived from ChapterProgress, and marking unread can move a series
       // between them (or drop it from both).
       void queryClient.invalidateQueries({ queryKey: ['home'] })
+      void queryClient.invalidateQueries({ queryKey: ['progress'] })
     },
   })
 }

@@ -31,21 +31,21 @@ type Story = StoryObj<typeof meta>
 /** In the Continue hero, which is where Home puts it: a right-hand column when wide, a row under the actions otherwise. */
 export const InTheHero: Story = {
   args: { hosted: true },
-  render: (args) => <ContinueHero items={continueReading} rail="continue" glance={<ReadingWeeks {...args} />} />,
+  render: (args) => <ContinueHero items={continueReading} glance={<ReadingWeeks {...args} />} />,
   play: async ({ canvas }) => {
     const glance = await canvas.findByRole('region', { name: 'Last 5 weeks' })
     await expect(within(glance).getByText('Read today to keep it going')).toBeVisible()
-    await expect(within(glance).getByLabelText('6 day streak')).toBeVisible()
+    await expect(within(glance).getByLabelText('Current streak: 6 days')).toBeVisible()
     await waitFor(() => expect(within(glance).getByRole('progressbar', { name: 'This week' })).toHaveAttribute('aria-valuenow', '14'))
   },
 }
 
 export const ReadToday: Story = {
   args: { days: history(true), hosted: true },
-  render: (args) => <ContinueHero items={continueReading} rail="continue" glance={<ReadingWeeks {...args} />} />,
+  render: (args) => <ContinueHero items={continueReading} glance={<ReadingWeeks {...args} />} />,
   play: async ({ canvas }) => {
     const glance = await canvas.findByRole('region', { name: 'Last 5 weeks' })
-    await expect(within(glance).getByText('Today counts. Best: 31 days')).toBeVisible()
+    await expect(within(glance).getByText('You read today. Longest streak: 31 days')).toBeVisible()
   },
 }
 
@@ -71,7 +71,7 @@ export const StreaksSwitchedOff: Story = {
   args: { summary: { ...progressSummary, showStreaks: false } },
   play: async ({ canvas }) => {
     const glance = await canvas.findByRole('region', { name: 'Last 5 weeks' })
-    await expect(within(glance).queryByLabelText(/day streak/)).toBeNull()
+    await expect(within(glance).queryByLabelText(/Current streak/)).toBeNull()
     await expect(within(glance).queryByText('Read today to keep it going')).toBeNull()
   },
 }

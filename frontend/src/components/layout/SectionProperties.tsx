@@ -8,7 +8,7 @@ import {
   IconArrowDown,
   IconArrowUp,
   IconTrash,
-} from '@tabler/icons-react'
+} from '../../lib/icons'
 import type { PageSection } from '../../api/hooks'
 import type { CustomRail } from '../../api/customRails'
 import { useLabel } from '../../i18n-context'
@@ -78,7 +78,6 @@ export function SectionProperties({
             {def?.hero && (
               <Switch
                 label={t`Lead with a hero`}
-                description={t`Show the most recent series as a large card, with the rest in a tray of posters under it, instead of a plain row.`}
                 checked={section.hero ?? false}
                 onChange={(e) => onChange({ hero: e.currentTarget.checked })}
               />
@@ -142,7 +141,7 @@ export function SectionProperties({
                 <Button
                   size="xs"
                   variant="default"
-                  leftSection={<IconArrowBarToUp size={14} />}
+                  leftSection={<IconArrowBarToUp size={16} />}
                   disabled={index <= 0}
                   onClick={() => onMove(0)}
                 >
@@ -151,7 +150,7 @@ export function SectionProperties({
                 <Button
                   size="xs"
                   variant="default"
-                  leftSection={<IconArrowUp size={14} />}
+                  leftSection={<IconArrowUp size={16} />}
                   disabled={index <= 0}
                   onClick={() => onMove(index - 1)}
                 >
@@ -160,7 +159,7 @@ export function SectionProperties({
                 <Button
                   size="xs"
                   variant="default"
-                  leftSection={<IconArrowDown size={14} />}
+                  leftSection={<IconArrowDown size={16} />}
                   disabled={index >= total - 1}
                   onClick={() => onMove(index + 1)}
                 >
@@ -169,7 +168,7 @@ export function SectionProperties({
                 <Button
                   size="xs"
                   variant="default"
-                  leftSection={<IconArrowBarToDown size={14} />}
+                  leftSection={<IconArrowBarToDown size={16} />}
                   disabled={index >= total - 1}
                   onClick={() => onMove(total - 1)}
                 >
@@ -190,7 +189,7 @@ export function SectionProperties({
                   <Button
                     color="var(--danger)"
                     variant="light"
-                    leftSection={<IconTrash size={14} />}
+                    leftSection={<IconTrash size={16} />}
                     onClick={() => setConfirmDelete(true)}
                   >
                     <Trans>Delete rail</Trans>

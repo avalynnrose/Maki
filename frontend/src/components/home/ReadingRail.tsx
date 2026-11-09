@@ -1,20 +1,21 @@
 import { memo, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
-import { IconPlayerPlayFilled } from '@tabler/icons-react'
+import { IconBookFilled } from '../../lib/icons'
+import { coverChapterLabel } from '../../lib/chapterLabel'
 import type { HomeReadingItem } from '../../api/hooks'
 import { useLingui } from '@lingui/react/macro'
 import { plural } from '@lingui/core/macro'
 import { Rail } from '../ui/Rail'
-import { ReadingCardMenu, type ReadingRailKind } from './ReadingCardMenu'
+import { ReadingCardMenu } from './ReadingCardMenu'
 
 /**
- * Horizontal rail of "open this chapter" posters, for Home's Continue reading and Jump back in.
+ * Horizontal rail of "open this chapter" posters, for Home's Continue reading.
  *
  * Deliberately not `components/ui/CoverCard`: that takes a whole `SeriesDto` and links to the
  * series page, whereas these link straight into the reader and carry a chapter label rather than
  * download counts. It reuses that card's CSS classes, so the two match without new layout rules.
  */
-export function ReadingRail({ items, rail }: { items: HomeReadingItem[]; rail: ReadingRailKind }) {
+export const ReadingRail = memo(function ReadingRail({ items }: { items: HomeReadingItem[] }) {
   return (
     <Rail>
       {items.map((item) => (
@@ -24,15 +25,15 @@ export function ReadingRail({ items, rail }: { items: HomeReadingItem[]; rail: R
           style={item.coverAccent ? ({ '--series-accent': item.coverAccent } as CSSProperties) : undefined}
         >
           <ReadingCard item={item} />
-          <ReadingCardMenu item={item} rail={rail} className="reading-card-menu" />
+          <ReadingCardMenu item={item} className="reading-card-menu" />
         </div>
       ))}
     </Rail>
   )
-}
+})
 
 /**
- * One poster that opens the reader. `note` replaces the "# new" count in the corner of the meta row.
+ * One poster that opens the reader. `note` replaces the "# unread" count in the corner of the meta row.
  * Memoized: `item` keeps its reference across renders, so unrelated Home state does not re-render the cards.
  */
 export const ReadingCard = memo(function ReadingCard({ item, note }: { item: HomeReadingItem; note?: string }) {
@@ -55,9 +56,9 @@ export const ReadingCard = memo(function ReadingCard({ item, note }: { item: Hom
 
         <div className="cover-corners">
           <div className="cover-corner cover-corner-left">
-            <span className="cover-chapter">
-              <IconPlayerPlayFilled size={10} />
-              <span>{chapterLabel}</span>
+            <span className="cover-chapter" title={chapterLabel}>
+              <IconBookFilled size={10} />
+              <span>{coverChapterLabel(chapterLabel)}</span>
             </span>
           </div>
         </div>
@@ -72,13 +73,13 @@ export const ReadingCard = memo(function ReadingCard({ item, note }: { item: Hom
             </div>
           )}
           <div className="cover-row">
-            <span>{item.page > 0 ? t`Resume` : t`Start`}</span>
+            <span className="cover-row-verb">{item.page > 0 ? t`Resume` : t`Start`}</span>
             {note ? (
-              <span className="cover-new cover-new-quiet">{note}</span>
+              <span className="cover-new">{note}</span>
             ) : (
               unreadChapters > 0 && (
-                <span className="cover-new cover-new-quiet">
-                  {plural(unreadChapters, { one: '# new', other: '# new' })}
+                <span className="cover-new">
+                  {plural(unreadChapters, { one: '# unread', other: '# unread' })}
                 </span>
               )
             )}

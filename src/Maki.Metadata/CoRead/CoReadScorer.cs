@@ -95,17 +95,17 @@ public static class CoReadScorer
                 continue;
             }
 
-            var neighbours = graph.NeighboursAt(seedNode);
-            var strengths = graph.WeightsAt(seedNode);
+            var edges = graph.EdgesAt(seedNode);
 
-            for (var i = 0; i < neighbours.Length; i++)
+            for (var i = 0; i < edges.Length; i++)
             {
-                if (strengths[i] < tuning.MinStrength)
+                var strength = edges.Weight(i);
+                if (strength < tuning.MinStrength)
                 {
                     continue;
                 }
 
-                var id = graph.IdAt(neighbours[i]);
+                var id = graph.IdAt(edges.Neighbour(i));
 
                 // A seed being read alongside another seed is not something the user can act on.
                 if (seeds.Contains(id))
@@ -113,7 +113,7 @@ public static class CoReadScorer
                     continue;
                 }
 
-                var contribution = seedWeight * strengths[i];
+                var contribution = seedWeight * strength;
                 scores[id] = scores.GetValueOrDefault(id) + contribution;
 
                 if (strongest is not null && contribution > strongest.GetValueOrDefault(id))
@@ -149,5 +149,66 @@ public static class CoReadScorer
         }
 
         return scores;
+    }
+
+    /// <summary>
+    /// Every seed that earned each of <paramref name="candidates"/> a share of its <see cref="Score"/>,
+    /// strongest first, over the same edges and weights. Only for the handful of picks a page
+    /// returns, so a card whose strongest seed is already named elsewhere can name its next one.
+    /// </summary>
+    public static Dictionary<long, List<long>> SeedsFor(
+        PairGraphIndex graph,
+        IReadOnlyCollection<long> seedIds,
+        IReadOnlyDictionary<long, double>? seedWeights,
+        CoReadTuning tuning,
+        IReadOnlySet<long> candidates)
+    {
+        var found = new Dictionary<long, List<(long Seed, double Contribution)>>();
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var seeds = new HashSet<long>(seedIds);
+        foreach (var seedId in seeds)
+        {
+            if (!graph.TryGetNode(seedId, out var seedNode))
+            {
+                continue;
+            }
+
+            var seedWeight = seedWeights is not null && seedWeights.TryGetValue(seedId, out var w) ? w : 1.0;
+            if (seedWeight <= 0)
+            {
+                continue;
+            }
+
+            var edges = graph.EdgesAt(seedNode);
+            for (var i = 0; i < edges.Length; i++)
+            {
+                var strength = edges.Weight(i);
+                if (strength < tuning.MinStrength)
+                {
+                    continue;
+                }
+
+                var id = graph.IdAt(edges.Neighbour(i));
+                if (!candidates.Contains(id) || seeds.Contains(id))
+                {
+                    continue;
+                }
+
+                if (!found.TryGetValue(id, out var list))
+                {
+                    found[id] = list = [];
+                }
+
+                list.Add((seedId, seedWeight * strength));
+            }
+        }
+
+        return found.ToDictionary(
+            kv => kv.Key,
+            kv => kv.Value.OrderByDescending(x => x.Contribution).ThenBy(x => x.Seed).Select(x => x.Seed).ToList());
     }
 }

@@ -3,9 +3,7 @@ import {
   AppShell,
   Box,
   Burger,
-  Center,
   Group,
-  Loader,
   ScrollArea,
   Stack,
   Text,
@@ -14,17 +12,15 @@ import {
 import { useDisclosure, useMediaQuery } from '@mantine/hooks'
 import {
   IconArrowLeft,
-  IconDownload,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
-} from '@tabler/icons-react'
-import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
+} from './lib/icons'
+import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import {
   useHealth,
   useMetadataSettings,
   usePrefetchSeriesOnHover,
-  useQueueSummary,
   useSetupStatus,
   useUiSettings,
 } from './api/hooks'
@@ -40,7 +36,7 @@ import MetadataGatePage from './pages/MetadataGatePage'
 import { CommandPaletteModal, CommandPaletteTrigger } from './components/CommandPalette'
 import { IconBrandMark } from './components/IconBrandMark'
 import { NotificationBell } from './components/NotificationBell'
-import { CountIndicator } from './components/ui/CountIndicator'
+import { ActivityButton } from './components/ActivityButton'
 import MetadataDumpProgress from './components/MetadataDumpProgress'
 import SetupWizard from './components/SetupWizard'
 import SidebarFooter from './components/layout/SidebarFooter'
@@ -49,14 +45,15 @@ import AppearanceAnnouncementModal from './components/AppearanceAnnouncementModa
 import { NavHistoryProvider, ScrollMemory } from './lib/navHistory'
 import { TipLayer } from './components/ui/TipLayer'
 import { EmptyState } from './components/ui/EmptyState'
+import { DelayedLoader } from './components/ui/DelayedLoader'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 import { useLanguageSync } from './i18n-context'
-import { Plural, Trans, useLingui } from '@lingui/react/macro'
-import { plural } from '@lingui/core/macro'
+import { Trans, useLingui } from '@lingui/react/macro'
 import { useLingui as useLinguiReact } from '@lingui/react'
-import { navSections, isActive, type NavItem } from './nav'
-import { DocumentTitle, DocumentTitleProvider } from './lib/documentTitle'
+import { navSections, isActive, isInSection, type NavItem } from './nav'
+import { DocumentTitle, DocumentTitleProvider, usePageName } from './lib/documentTitle'
 import { lazyRoute, preloadRoutes } from './lib/routePreload'
+import { SoFarSyncAskDialog } from './components/SoFarSyncAskDialog'
 // Home and Library stay eagerly imported: "/" resolves to one of the two on every cold load
 // (StartPageRedirect), so splitting them would only add a round trip to the first paint.
 import HomePage from './pages/HomePage'
@@ -77,15 +74,18 @@ const StatsPage = lazyRoute(() => import('./pages/StatsPage'))
 const NotificationsPage = lazyRoute(() => import('./pages/NotificationsPage'))
 const SettingsPage = lazyRoute(() => import('./pages/SettingsPage'))
 const HealthPage = lazyRoute(() => import('./pages/HealthPage'))
+const PageConversionWizardPage = lazyRoute(() => import('./pages/PageConversionWizardPage'))
 const ReaderPage = lazyRoute(() => import('./pages/reader/ReaderPage'))
 
 const NAV_COLLAPSED_KEY = 'sidebar-collapsed'
 
-function readNavCollapsed(): boolean {
+/** The user's own choice, or null when they never toggled it and the window width decides. */
+function readNavChoice(): boolean | null {
   try {
-    return localStorage.getItem(NAV_COLLAPSED_KEY) === '1'
+    const stored = localStorage.getItem(NAV_COLLAPSED_KEY)
+    return stored === '1' ? true : stored === '0' ? false : null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -106,11 +106,27 @@ function NotFoundPage() {
 
 /** Shared placeholder while a route chunk is in flight. Matches StartPageRedirect's loader. */
 function RouteFallback() {
-  return (
-    <Center py={80}>
-      <Loader />
-    </Center>
-  )
+  return <DelayedLoader />
+}
+
+/** Whether a vertical scroller has more below, so a phone drawer can fade its foot instead of
+ *  cutting Settings off with nothing to say the list goes on. */
+function useScrollMore() {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [more, setMore] = useState(false)
+  const update = useCallback(() => {
+    const el = viewportRef.current
+    if (el) setMore(el.scrollHeight - el.clientHeight - el.scrollTop > 4)
+  }, [])
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    if (el.firstElementChild) observer.observe(el.firstElementChild)
+    return () => observer.disconnect()
+  }, [update])
+  return { viewportRef, more, update }
 }
 
 function NavLinks({
@@ -126,7 +142,7 @@ function NavLinks({
   const { pathname } = useLocation()
   const { _ } = useLinguiReact()
   return (
-    <Stack gap={22}>
+    <Stack gap={22} className="nav-sections">
       {sections.map((section) => (
         <Stack key={section.label.id} gap={2}>
           <Text className="nav-section-label" mb={2}>
@@ -135,15 +151,18 @@ function NavLinks({
           {section.items.map((item) => {
             const count = badges?.[item.path]?.count ?? 0
             const tone = badges?.[item.path]?.tone
+            const current = isActive(item, pathname)
+            const active = isInSection(item, pathname)
             return (
               <Link
                 key={item.path}
                 to={item.path}
                 className="nav-link"
-                data-active={isActive(item, pathname)}
+                data-active={active}
+                aria-current={current ? 'page' : active ? 'true' : undefined}
                 onClick={onNavigate}
               >
-                <item.icon size={18} stroke={1.7} className="nav-icon" />
+                <item.icon size={18} className="nav-icon" />
                 {_(item.label)}
                 {count > 0 && (
                   <span className="nav-count tnum" data-tone={tone}>
@@ -156,55 +175,6 @@ function NavLinks({
         </Stack>
       ))}
     </Stack>
-  )
-}
-
-function ActivityButton() {
-  const { t } = useLingui()
-  const { data: summary } = useQueueSummary()
-  const active = summary?.active ?? 0
-  // A download waiting on an import decision outranks work in progress: progress finishes on its
-  // own, this does not, and the count is the only thing telling anyone it is there.
-  const review = summary?.awaitingImport ?? 0
-  const count = review > 0 ? review : active
-  const accessibleName =
-    review > 0
-      ? plural(review, {
-          one: 'Activity, # download waiting for an import decision',
-          other: 'Activity, # downloads waiting for an import decision',
-        })
-      : active > 0
-        ? plural(active, {
-            one: 'Activity, # download in progress',
-            other: 'Activity, # downloads in progress',
-          })
-        : t`Activity`
-  return (
-    <Tooltip
-      label={
-        review > 0 ? (
-          <Plural value={review} one="# download waiting for an import decision"
-            other="# downloads waiting for an import decision" />
-        ) : active > 0 ? (
-          <Plural value={active} one="# download in progress" other="# downloads in progress" />
-        ) : (
-          <Trans>Activity</Trans>
-        )
-      }
-      withArrow
-    >
-      <CountIndicator count={count} tone={review > 0 ? 'warn' : 'brand'}>
-        <ActionIcon
-          component={Link}
-          to="/activity"
-          variant="subtle"
-          color="var(--neutral)"
-          aria-label={accessibleName}
-        >
-          <IconDownload size={19} />
-        </ActionIcon>
-      </CountIndicator>
-    </Tooltip>
   )
 }
 
@@ -254,6 +224,7 @@ function AuthGate() {
     <DocumentTitleProvider>
       <LiveEvents />
       <OfflineSync />
+      <SoFarSyncAskDialog />
       <DocumentTitle />
       <MetadataGate>
         {inReader ? (
@@ -305,6 +276,29 @@ function LiveEvents() {
   return null
 }
 
+// True once the page's own heading has scrolled up under the top bar (or the page has none), so
+// the bar names the page only when the big title is out of sight rather than saying it twice.
+function usePageTitleAway(active: boolean, pathname: string) {
+  const [away, setAway] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    const check = () => {
+      const heading = document.querySelector('main h1')
+      setAway(!heading || heading.getBoundingClientRect().bottom < 64)
+    }
+    // A lazy route renders its heading a moment after the path changes; checking at once would
+    // flash the name in before the heading exists.
+    setAway(false)
+    const settle = window.setTimeout(check, 400)
+    document.addEventListener('scroll', check, { capture: true, passive: true })
+    return () => {
+      window.clearTimeout(settle)
+      document.removeEventListener('scroll', check, { capture: true })
+    }
+  }, [active, pathname])
+  return away
+}
+
 function AppShellRoutes() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -336,8 +330,11 @@ function AppShellRoutes() {
       openPinned()
     }
   }
+  // The burger can appear under a mouse that has not moved: leaving the reader puts its back button
+  // right there. Chrome still sends pointerenter then, so a closed drawer opens only on real movement.
   const peekEnter = (e: React.PointerEvent) => {
     if (e.pointerType !== 'mouse') return
+    if (!opened && e.movementX === 0 && e.movementY === 0) return
     window.clearTimeout(peekTimer.current)
     if (!opened) setReveal('hover')
     setPeeking(true)
@@ -357,23 +354,34 @@ function AppShellRoutes() {
   useEffect(() => () => window.clearTimeout(peekTimer.current), [])
   // Per device rather than per account: the same person wants the column on a desktop monitor and
   // the room on a tablet.
-  const [navCollapsed, setNavCollapsed] = useState(readNavCollapsed)
+  const [navChoice, setNavChoice] = useState(readNavChoice)
+  // A tablet-width window folds the sidebar by default: beside a 232px column the page is left with
+  // a phone's width. Read synchronously so the first paint is already the right layout.
+  const midWidth = useMediaQuery('(min-width: 48em) and (max-width: 63.9375em)', false, {
+    getInitialValueInEffect: false,
+  })
+  const navCollapsed = navChoice ?? midWidth
   // The page's padding animates only while the sidebar folds or unfolds; see `[data-nav-moving]`.
+  // Set in the same render as the change, so a fold the window width causes animates like a toggle.
   const [navMoving, setNavMoving] = useState(false)
-  const navMovingTimer = useRef(0)
-  useEffect(() => () => window.clearTimeout(navMovingTimer.current), [])
+  const [shownCollapsed, setShownCollapsed] = useState(navCollapsed)
+  if (shownCollapsed !== navCollapsed) {
+    setShownCollapsed(navCollapsed)
+    setNavMoving(true)
+  }
+  useEffect(() => {
+    if (!navMoving) return
+    const timer = window.setTimeout(() => setNavMoving(false), 400)
+    return () => window.clearTimeout(timer)
+  }, [navMoving, shownCollapsed])
   const toggleNavCollapsed = () => {
     const next = !navCollapsed
-    setNavCollapsed(next)
-    setNavMoving(true)
-    window.clearTimeout(navMovingTimer.current)
-    navMovingTimer.current = window.setTimeout(() => setNavMoving(false), 400)
+    setNavChoice(next)
     close()
     try {
-      if (next) localStorage.setItem(NAV_COLLAPSED_KEY, '1')
-      else localStorage.removeItem(NAV_COLLAPSED_KEY)
+      localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0')
     } catch {
-      /* private mode: collapsed for this visit only */
+      /* private mode: the choice holds for this visit only */
     }
   }
   const phone = useMediaQuery('(max-width: 47.9375em)', false, { getInitialValueInEffect: false })
@@ -383,6 +391,7 @@ function AppShellRoutes() {
   const drawerClosed = (navCollapsed || phone) && !opened
   const navbarRef = useRef<HTMLDivElement>(null)
   const burgerRef = useRef<HTMLButtonElement>(null)
+  const { viewportRef: navViewportRef, more: navMore, update: updateNavMore } = useScrollMore()
   const { data: setup } = useSetupStatus()
   const { data: metadata, isError: metadataFailed } = useMetadataSettings()
   const { data: ui } = useUiSettings()
@@ -421,6 +430,8 @@ function AppShellRoutes() {
   const healthIssues = health?.length ?? 0
   const healthTone = health?.some((h) => h.severity === 'error') ? 'danger' : 'warn'
   const [paletteOpened, { open: openPalette, close: closePalette }] = useDisclosure(false)
+  const pageName = usePageName()
+  const titleAway = usePageTitleAway(phone, location.pathname)
 
   useEffect(() => {
     // Send anyone sitting on a page that has just become unavailable back through "/", which
@@ -437,6 +448,19 @@ function AppShellRoutes() {
   useEffect(() => {
     if (pinned) navbarRef.current?.querySelector<HTMLElement>('a.nav-link[href]')?.focus()
   }, [pinned])
+
+  // A new page takes focus, so keyboard and screen reader users start at its content rather than on
+  // the sidebar link they left. A control inside the page that changes the path (Discover's tabs)
+  // still holds focus and keeps it; query-only changes such as Settings tabs never get here.
+  const focusedPath = useRef(location.pathname)
+  useEffect(() => {
+    if (focusedPath.current === location.pathname) return
+    focusedPath.current = location.pathname
+    const main = document.getElementById('main')
+    const active = document.activeElement
+    if (!main || (active && active !== document.body && main.contains(active))) return
+    main.focus({ preventScroll: true })
+  }, [location.pathname])
 
   useEffect(() => {
     if (!opened) return
@@ -481,21 +505,28 @@ function AppShellRoutes() {
           bell, so the page starts at the top edge of the window. */}
       <AppShell.Header className="app-header" hiddenFrom={navCollapsed ? undefined : 'sm'}>
         <Group h="100%" className="app-header-row" justify="space-between" wrap="nowrap">
-          <Group gap="sm" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap" className="app-header-lead">
             <Burger
               ref={burgerRef}
               opened={opened}
               onClick={toggle}
               onPointerEnter={peekEnter}
+              onPointerMove={peeking ? undefined : peekEnter}
               onPointerLeave={peekLeave}
               size="sm"
               aria-label={t`Menu`}
               aria-expanded={opened}
               aria-controls="app-navbar"
             />
-            <span className="brand-mark" role="img" aria-label={t`Manga manager`} title={t`Manga manager`}>
-              <IconBrandMark />
-            </span>
+            {/* A phone has no sidebar to show where you are, so the bar names the page instead of
+                repeating the logo the drawer already carries. */}
+            {phone && pageName && titleAway ? (
+              <span className="app-header-title">{pageName}</span>
+            ) : (
+              <span className="brand-mark" role="img" aria-label={t`Manga manager`} title={t`Manga manager`}>
+                <IconBrandMark />
+              </span>
+            )}
             {navCollapsed && (
               <Group component="nav" gap={4} wrap="nowrap" visibleFrom="sm" aria-label={t`Quick links`}>
                 {quickItems.map((item) => (
@@ -503,9 +534,9 @@ function AppShellRoutes() {
                     key={item.path}
                     to={item.path}
                     className="app-header-link"
-                    data-active={isActive(item, location.pathname)}
+                    data-active={isInSection(item, location.pathname)}
                   >
-                    <item.icon size={18} stroke={1.7} />
+                    <item.icon size={18} />
                     {_(item.label)}
                   </Link>
                 ))}
@@ -539,6 +570,7 @@ function AppShellRoutes() {
       <AppShell.Navbar
         ref={navbarRef}
         id="app-navbar"
+        aria-label={t`Main`}
         className="app-navbar"
         inert={drawerClosed}
         data-reveal={navCollapsed || phone ? reveal : undefined}
@@ -546,7 +578,7 @@ function AppShellRoutes() {
         onPointerEnter={peeking ? peekEnter : undefined}
         onPointerLeave={peeking ? peekLeave : undefined}
       >
-        <Group gap={10} mb={14} px={4} wrap="nowrap">
+        <Group gap={10} mt={4} mb={14} px={4} mih={44} wrap="nowrap" className="nav-brand-row">
           <span className="brand-mark" role="img" aria-label={t`Manga manager`} title={t`Manga manager`}>
             <IconBrandMark />
           </span>
@@ -571,7 +603,16 @@ function AppShellRoutes() {
             <CommandPaletteTrigger onOpen={openPalette} />
           </Box>
         )}
-        <AppShell.Section grow component={ScrollArea} type="never" mt={14}>
+        <AppShell.Section
+          grow
+          component={ScrollArea}
+          type="never"
+          mt={{ base: 8, sm: 14 }}
+          className="nav-scroll"
+          viewportRef={navViewportRef}
+          onScrollPositionChange={updateNavMore}
+          data-fade-end={navMore || undefined}
+        >
           <NavLinks
             sections={sections}
             onNavigate={close}
@@ -587,7 +628,7 @@ function AppShellRoutes() {
             actions={
               navCollapsed ? undefined : (
                 <Group gap={2} wrap="nowrap" visibleFrom="sm">
-                  <ActivityButton />
+                  <ActivityButton position="top-start" />
                   <NotificationBell position="top-start" />
                 </Group>
               )
@@ -626,6 +667,7 @@ function AppShellRoutes() {
               element={homeEnabled ? <HomePage /> : <Navigate to="/library" replace />}
             />
             <Route path="/library" element={<LibraryPage />} />
+            <Route path="/library/archived" element={<LibraryPage scope="archived" />} />
             <Route path="/series/:id" element={<SeriesDetailPage />} />
             <Route path="/add" element={<AddSeriesPage />} />
             <Route path="/creator/:name" element={<CreatorPage />} />
@@ -646,6 +688,10 @@ function AppShellRoutes() {
                 already out there keep working. */}
             <Route path="/rewind" element={<Navigate replace to="/stats" />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route
+              path="/settings/page-conversion"
+              element={isAdmin ? <PageConversionWizardPage /> : <Navigate to="/" replace />}
+            />
             <Route path="/health" element={isAdmin ? <HealthPage /> : <Navigate to="/" replace />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
@@ -697,11 +743,7 @@ function StartPageRedirect({
   const { data: ui, isPending } = useUiSettings()
 
   if (isPending || (ui?.startPage === 'discover' && !discoverKnown)) {
-    return (
-      <Center py={80}>
-        <Loader />
-      </Center>
-    )
+    return <DelayedLoader />
   }
 
   // Home is the last resort only while it exists; with it off, the library is.

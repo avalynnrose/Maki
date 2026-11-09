@@ -424,7 +424,7 @@ public class ReleaseServiceTests : IDisposable
 
         using var db = _db.NewContext();
         var torrents = new TorrentUpgradeService(db, new UpgradeEvaluationService(db, TestQuality.Create()), service,
-            null!, new FakeAppSettings(), TimeProvider.System, new FakeRelatedTitles(), NullLogger<TorrentUpgradeService>.Instance);
+            null!, new FakeAppSettings(), TimeProvider.System, new FakeRelatedTitles().Provider(), NullLogger<TorrentUpgradeService>.Instance);
         Assert.IsType<OkObjectResult>(await controller.Search(seriesId, "berserk", torrents, CancellationToken.None));
         var result = await controller.Grab(
             new ReleaseController.GrabRequest(seriesId, forged), new TestCurrentUser(1), db, CancellationToken.None);
@@ -474,7 +474,7 @@ public class ReleaseServiceTests : IDisposable
         var service = Build(http);
         var db = _db.NewContext();
         var torrents = new TorrentUpgradeService(db, new UpgradeEvaluationService(db, TestQuality.Create()), service,
-            null!, new FakeAppSettings(), TimeProvider.System, new FakeRelatedTitles(), NullLogger<TorrentUpgradeService>.Instance);
+            null!, new FakeAppSettings(), TimeProvider.System, new FakeRelatedTitles().Provider(), NullLogger<TorrentUpgradeService>.Instance);
         var controller = new ReleaseController(
             service, new ReleaseSearchCache(new MemoryCache(new MemoryCacheOptions())), new TestLocalizer(),
             NullLogger<ReleaseController>.Instance);
@@ -660,7 +660,7 @@ public class ReleaseServiceTests : IDisposable
 
         using var db = _db.NewContext();
         var torrents = new TorrentUpgradeService(db, new UpgradeEvaluationService(db, TestQuality.Create()), service,
-            null!, new FakeAppSettings(), TimeProvider.System, new FakeRelatedTitles(), NullLogger<TorrentUpgradeService>.Instance);
+            null!, new FakeAppSettings(), TimeProvider.System, new FakeRelatedTitles().Provider(), NullLogger<TorrentUpgradeService>.Instance);
         Assert.IsType<OkObjectResult>(await controller.Search(seriesId, "berserk", torrents, CancellationToken.None));
         await _settings.SetAsync(SettingKeys.IndexerBackend, "jackett");
         var result = await controller.Grab(

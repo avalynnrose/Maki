@@ -639,6 +639,42 @@ public class ChapterSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Locked_rows_no_source_lists_any_more_are_removed_unless_read_or_on_disk()
+    {
+        var seriesId = _db.SeedSeries(mappings: Mapping("fake"));
+        var reader = _db.SeedUser("locked-reader");
+        var file = SeedFile(seriesId, "Series/locked 4.cbz");
+        int readId, onDiskId;
+        using (var db = _db.NewContext())
+        {
+            var mappingId = db.SourceMappings.Single(m => m.SeriesId == seriesId).Id;
+            Chapter Locked(string label, int? fileId = null) => new()
+            {
+                SeriesId = seriesId, IsOneShot = true, Title = label, NumberRaw = label, Language = "en",
+                Wanted = true, ChapterFileId = fileId,
+                SourceLinks = [new ChapterSourceLink { SourceMappingId = mappingId, SourceChapterId = label }]
+            };
+
+            var read = Locked("\U0001F512 第3話");
+            var onDisk = Locked("\U0001F512 第4話", file);
+            db.Chapters.AddRange(Locked("\U0001F512 第2話"), Locked("(Preview) 1巻"), read, onDisk);
+            db.SaveChanges();
+            readId = read.Id;
+            onDiskId = onDisk.Id;
+        }
+
+        SeedProgress(reader, seriesId, readId, page: 2);
+        var fake = new FakeSource { Name = "fake" };
+        var source = new FakeSource { Name = "fake", OnListChapters = _ => [fake.Chapter(1)] };
+
+        await BuildService(null, source).SyncSeriesAsync(seriesId);
+
+        var chapters = ChaptersOf(seriesId);
+        Assert.Equal([readId, onDiskId], chapters.Where(c => c.Number is null).Select(c => c.Id));
+        Assert.Contains(chapters, c => c.Number == 1);
+    }
+
+    [Fact]
     public async Task One_shot_with_its_own_file_is_not_promoted_onto_a_numbered_row_with_another()
     {
         var seriesId = _db.SeedSeries(mappings: Mapping("fake"));
@@ -689,6 +725,14 @@ public class ChapterSyncServiceTests : IDisposable
         }
 
         SeedProgress(reader, seriesId, dupId, page: 7);
+        using (var db = _db.NewContext())
+        {
+            db.ChapterNotes.Add(new ChapterNote
+            {
+                AuthorId = reader, SeriesId = seriesId, ChapterId = dupId, PageIndex = 3, Body = "kept", CreatedAt = DateTime.UtcNow,
+            });
+            db.SaveChanges();
+        }
 
         await BuildService(null, new FakeSource { Name = "fake" }).SyncSeriesAsync(seriesId);
 
@@ -698,6 +742,10 @@ public class ChapterSyncServiceTests : IDisposable
         var progress = Assert.Single(ProgressOf(seriesId));
         Assert.Equal(keeperId, progress.ChapterId);
         Assert.Equal(7, progress.PageIndex);
+        using var check = _db.NewContext();
+        var note = Assert.Single(check.ChapterNotes);
+        Assert.Equal(keeperId, note.ChapterId);
+        Assert.Equal(3, note.PageIndex);
     }
 
     [Fact]

@@ -188,6 +188,7 @@ public class QueueController(
             logger.LogWarning(ex, "Could not broadcast the download pause change");
         }
 
+        queue.WakePoll();
         await queue.WakeWorkersAsync(ct);
         return dto;
     }
@@ -240,7 +241,8 @@ public class QueueController(
 
     [Authorize(Policy = Policies.ManageDownloadQueue)]
     [HttpPost("{id:int}/retry")]
-    public async Task<IActionResult> Retry(int id, CancellationToken ct)
+    public async Task<IActionResult> Retry(
+        int id, CancellationToken ct, [FromServices] TorrentPollState? pollState = null)
     {
         var item = await db.DownloadQueue.FindAsync([id], ct);
         if (item is null)
@@ -260,10 +262,15 @@ public class QueueController(
             return this.Conflict(localizer, "error.chapter.alreadyQueued");
         }
 
-        // Scraper item that never had a mapping resolved (e.g. it failed before
-        // ResolveAndActivateAsync could set one) — ClaimNextAsync requires every Queued/RateLimited
-        // scraper item to have one, so send it back through resolution instead of straight to
-        // Queued. Torrent items never carry a SourceMappingId, so they're unaffected.
+        if ((await queue.ReleaseOutrankedSourcesAsync(db, [item], ct)).Contains(item.Id))
+        {
+            return this.Conflict(localizer, "error.queue.onlyFailedCanRetry");
+        }
+
+        // Scraper item with no mapping: it failed before ResolveAndActivateAsync could set one, or the
+        // release above dropped a source that is no longer the first choice. Resolving it here shows
+        // the source it will use straight away, instead of a Queued row the processor resolves later.
+        // Torrent items never carry a SourceMappingId.
         if (item.Protocol == AcquisitionProtocol.Scraper && item.SourceMappingId is null)
         {
             if (item.ChapterId is not { } unresolvedChapterId)
@@ -297,6 +304,10 @@ public class QueueController(
             item.SetError("error.download.rateLimited", new { source = sourceName });
         }
         await db.SaveChangesAsync(ct);
+        if (item.Protocol == AcquisitionProtocol.Torrent)
+        {
+            pollState?.TorrentAdded();
+        }
         await queue.SignalAsync(item.Id, ct);
         return NoContent();
     }
@@ -475,6 +486,7 @@ public class QueueController(
         item.CompletedAt = DateTime.UtcNow;
         item.PagesDone = item.PagesTotal;
         item.ClearError();
+        await importer.MarkForClientRemovalAsync(item, outcome, settledByUser: true, ct);
 
         // Saved before the rename: its active-download check re-queries this row, and an item still
         // reading as in-flight makes it refuse to name the files it just imported.

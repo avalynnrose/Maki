@@ -2,6 +2,7 @@
 using Maki.Core.Configuration;
 using Maki.Core.Entities;
 using Maki.Core.Paths;
+using System.Text.Json.Serialization;
 
 namespace Maki.Api.Dtos;
 
@@ -14,6 +15,9 @@ public record ReadingTimeEstimateDto(
 
 /// <summary>One of <see cref="Series.AltTitles"/>, flattened for the wire.</summary>
 public record LocalizedTitleDto(string Title, string? Language);
+
+/// <summary>One row of <c>GET series/lookup</c>.</summary>
+public record SeriesLookupDto(int Id, int? MangaBakaId, string? CoverUrl, bool Archived);
 
 public record SeriesDto(
     int Id,
@@ -34,9 +38,11 @@ public record SeriesDto(
     /// <summary>
     /// Other primary titles from the provider with the language each is written in, for the
     /// "show more" expander next to <see cref="OriginalTitle"/> and as the pool
-    /// <see cref="DisplayTitle"/> is chosen from.
+    /// <see cref="DisplayTitle"/> is chosen from. Left out of library list rows, which send
+    /// <see cref="AltTitleNames"/> instead.
     /// </summary>
-    List<LocalizedTitleDto> AltTitles,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<LocalizedTitleDto>? AltTitles,
     string Status,
     /// <summary>
     /// One of <see cref="SeriesTypes"/>, or null when the series predates the column and has not
@@ -89,7 +95,9 @@ public record SeriesDto(
     int? AniListId,
     int? MalId,
     int? KitsuId,
-    List<MetadataLink> Links,
+    /// <summary>Left out of library list rows: only the series page and the catalogue modal show them.</summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<MetadataLink>? Links,
     string? NumberingClash,
     DateTime Added,
     /// <summary>
@@ -153,6 +161,13 @@ public record SeriesDto(
     public SeriesOperationDto? Operation { get; init; }
 
     /// <summary>
+    /// <see cref="AltTitles"/> as bare names, which is all the title search reads. Library list rows
+    /// only, where they replace the titles with their languages.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? AltTitleNames { get; init; }
+
+    /// <summary>
     /// Source keys with a <see cref="SourceMapping"/> on this series, enabled or not. Empty means
     /// nothing is linked, which is the state the Library's source filter mainly exists to surface.
     /// <para>
@@ -212,11 +227,50 @@ public record SeriesDto(
     /// <summary>The series' own upgrade profile pin. Null means it follows the instance default.</summary>
     public int? UpgradeProfileId { get; init; }
 
+    /// <summary>When the series was archived, or null while it is active.</summary>
+    public DateTime? ArchivedAt { get; init; }
+
+    public int? ArchivedByUserId { get; init; }
+
+    /// <summary>
+    /// The series page should offer "finished, archive it?" to this caller. Detail endpoint only, and
+    /// already false for a caller without ArchiveSeries.
+    /// </summary>
+    public bool ArchiveHintEligible { get; init; }
+
+    /// <summary>
+    /// The series page should ask this caller to rate it: they finished it, have not rated it and
+    /// have not dismissed the ask. Detail endpoint only.
+    /// </summary>
+    public bool RateHintEligible { get; init; }
+
+    /// <summary>The caller's "so far" score (1–10), or null. Never set alongside <see cref="Rating"/>.</summary>
+    public int? ProvisionalRating { get; init; }
+
+    /// <summary>The highest chapter number read when <see cref="ProvisionalRating"/> was set.</summary>
+    public double? ProvisionalAtChapter { get; init; }
+
+    /// <summary>
+    /// The caller finished the series (<c>ReadingState.Finished</c>). The stars set a final rating
+    /// once this is true and a "so far" one while the series is part-read. Filled by the list and
+    /// detail endpoints.
+    /// </summary>
+    public bool Finished { get; init; }
+
+    /// <summary>
+    /// The "how is it so far?" prompt waiting for this caller: "hooked", "caughtUp", or null. Detail
+    /// endpoint only.
+    /// </summary>
+    public string? RatingCheckpoint { get; init; }
+
     /// <summary>"Default" | "On" | "Off": this series' choice about deleting read chapter files.</summary>
     public string ReadFileCleanup { get; init; } = nameof(Core.Entities.ReadFileCleanup.Default);
 
     /// <summary>Whether read files are actually being deleted, the series' choice and the instance switch combined. Detail endpoint only.</summary>
     public bool ReadFileCleanupActive { get; init; }
+
+    /// <summary>"Default" (follow the rules), "Never", or a stop every file of the series is converted at.</summary>
+    public string PageConversion { get; init; } = nameof(PageConversionOverride.Default);
 
     /// <summary>The last upgrade scan pass over this series, or null when it has never been scanned.</summary>
     public LastUpgradeScanDto? LastUpgradeScan { get; init; }
@@ -268,7 +322,7 @@ public record SeriesDto(
     /// </param>
     public static string? CoverUrlFor(int seriesId, string? coverPath, DateTime? version = null) =>
         coverPath != null
-            ? $"/api/v1/mediacover/{seriesId}/cover.jpg?v={CoverVersionCache.Get(seriesId, coverPath) ?? (version ?? DateTime.UtcNow).Ticks}"
+            ? $"/api/v1/mediacover/{seriesId}/cover.jpg?v={CoverVersionCache.Get(coverPath) ?? (version ?? DateTime.UtcNow).Ticks}"
             : null;
 
     /// <param name="rating">
@@ -337,7 +391,10 @@ public record SeriesDto(
         notificationMode.ToString())
     {
         UpgradeProfileId = s.UpgradeProfileId,
+        ArchivedAt = s.ArchivedAt,
+        ArchivedByUserId = s.ArchivedByUserId,
         ReadFileCleanup = s.ReadFileCleanup.ToString(),
+        PageConversion = s.PageConversion.ToString(),
         LockedFields = LockedFieldNames(s.LockedFields),
         LastUpgradeScan = s.LastUpgradeScanUtc is { } at
             ? new LastUpgradeScanDto(at, s.LastUpgradeScanProbed ?? 0, s.LastUpgradeScanQueued ?? 0,

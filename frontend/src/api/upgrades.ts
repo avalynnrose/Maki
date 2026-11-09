@@ -20,13 +20,13 @@ export const QUALITY_TIER_LABELS: Record<QualityTierName, MessageDescriptor> = {
   volume: msg`Volume`,
 }
 
-/** Shared with `FileQualityBadge` and `SourceCompareModal`'s per-column quality badge. */
+/** Shared with `FileQualityBadge` and `SourceCompareModal`'s per-column quality badge: the medal scale, with volume in its own hue. */
 export const QUALITY_TIER_COLOR: Record<QualityTierName, string> = {
-  unknown: 'gray',
-  aggregator: 'orange',
-  scanlator: 'blue',
-  official: 'teal',
-  volume: 'indigo',
+  unknown: 'var(--neutral)',
+  aggregator: 'var(--q-aggregator)',
+  scanlator: 'var(--q-scanlator)',
+  official: 'var(--q-official)',
+  volume: 'var(--volume)',
 }
 
 export interface ProfileTierDto {
@@ -315,6 +315,7 @@ export type UpgradeReasonCode =
   | 'upgrade_rejected'
   | 'reverted_by_user'
   | 'repeated_failure'
+  | 'removal_scheduled'
 
 /** Bucket codes only `UpgradeScanResultDto.skipped` carries, never an attempt/queue-row reason. */
 export type UpgradeSkipReasonCode =
@@ -352,6 +353,7 @@ export const UPGRADE_REASON_LABELS: Record<UpgradeReasonCode | UpgradeSkipReason
   upgrade_rejected: msg`Rejected after downloading the full chapter`,
   reverted_by_user: msg`Reverted by a user`,
   repeated_failure: msg`Its download failed too many times`,
+  removal_scheduled: msg`Read file cleanup is going to delete this file`,
   unmeasured: msg`Not measured yet`,
   trusted: msg`Protected from upgrades`,
   cutoff_met: msg`Already meets the cutoff`,
@@ -373,7 +375,7 @@ export function upgradeReasonLabel(renderLabel: (m: MessageDescriptor) => string
   return renderLabel(UPGRADE_REASON_LABELS[code as UpgradeReasonCode | UpgradeSkipReasonCode] ?? code)
 }
 
-/** Why a scan passed chapters or candidates over, most common first: "Label (3) · Label (1)". */
+/** Why a scan passed chapters or candidates over, most common first: "Label (3), Label (1)". */
 export function scanReasonSummary(
   renderLabel: (m: MessageDescriptor) => string,
   skipped: Record<string, number> | null | undefined,
@@ -382,7 +384,7 @@ export function scanReasonSummary(
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a)
     .map(([code, count]) => `${upgradeReasonLabel(renderLabel, code)} (${i18n.number(count)})`)
-    .join(' · ')
+    .join(', ')
 }
 
 export interface NumberRangeDto {
@@ -483,7 +485,7 @@ export const SPAN_VERDICT_LABELS: Record<SpanVerdictKey, MessageDescriptor> = {
 
 export const SPAN_VERDICT_COLOR: Record<SpanVerdictKey, string> = {
   autoGrab: 'var(--ok)',
-  proposal: 'var(--brand)',
+  proposal: 'var(--warn)',
   ignore: 'var(--neutral)',
   titleUncertain: 'var(--warn)',
 }
@@ -684,6 +686,8 @@ export function useUpgradeProfiles() {
   return useQuery({
     queryKey: ['upgrade-profiles'],
     queryFn: () => api<UpgradeProfileDto[]>('/upgrade-profiles'),
+    // Changes only through the profile editor, which invalidates it.
+    staleTime: 5 * 60 * 1000,
   })
 }
 

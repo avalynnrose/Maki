@@ -61,6 +61,15 @@ export function makeManifest(overrides: Partial<ReaderManifest> & Pick<ReaderMan
     pinnedProfileId: null,
     autoProfileId: 1,
     pageVersion: 'v1',
+    enhanceServer: {
+      enabled: true,
+      models: [
+        { id: 'span-s', ready: true },
+        { id: 'realesrgan-av3', ready: false },
+      ],
+    },
+    noteCount: 0,
+    notedPages: [],
     ...overrides,
   }
 }
@@ -85,6 +94,8 @@ export const chapters: Record<number, ReaderManifest> = {
     seriesChapterCount: 142,
     seriesReadCount: 131,
     seriesWantedCount: 150,
+    noteCount: 3,
+    notedPages: [1, 11],
   }),
   // The newest chapter on disk, with more wanted: the end screen has no next chapter to offer.
   1142: makeManifest({
@@ -239,6 +250,8 @@ export function librarySeries(entry: CatalogueEntry): SeriesDto {
     tagIds: [],
     monitored: true,
     monitorNewItems: 'All',
+    archivedAt: null,
+    archivedByUserId: null,
     rootFolderId: 1,
     folderName: entry.title,
     rootFolderPath: `/library/${entry.title}`,
@@ -261,6 +274,7 @@ export function librarySeries(entry: CatalogueEntry): SeriesDto {
     removedChapterCount: 0,
     readFileCleanup: 'Off',
     readFileCleanupActive: false,
+    pageConversion: 'Default',
     knownChapterCount: entry.chapters,
     queuedCount: 0,
     downloadingCount: 0,

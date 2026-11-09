@@ -42,6 +42,11 @@ public class ChapterNumberParserTests
     [InlineData("ｅｐ．１\u3000こちとらマドンナ", 1, null, false)]
     [InlineData("ｅｐｉｓｏｄｅ９\u3000溢れる想い", 9, null, false)]
     [InlineData("EP・15 めくるめくって", 15, null, false)]
+    [InlineData("第5回", 5, null, false)]
+    [InlineData("12話 タイトル", 12, null, false)]
+    [InlineData("Chapter ③", 3, null, false)]
+    [InlineData("③", 3, null, false)]
+    [InlineData("第⑤話", 5, null, false)]
     public void Parses_chapter_numbers(string input, double expected, int? volume, bool oneShot)
     {
         var result = ChapterNumberParser.Parse(input);
@@ -51,62 +56,23 @@ public class ChapterNumberParserTests
     }
 
     [Theory]
-    [InlineData("20251030")]
-    [InlineData("第20251030話")]
-    [InlineData("Ch. 10000")]
-    public void A_number_that_is_a_date_or_an_id_is_not_a_chapter(string input)
-    {
-        Assert.Null(ChapterNumberParser.Parse(input).Number);
-    }
-
-    [Fact]
-    public void The_largest_real_chapter_numbers_still_parse() =>
-        Assert.Equal(9999m, ChapterNumberParser.Parse("Ch. 9999").Number);
-
-    [Theory]
-    [InlineData("１【電子限定特典付き】", 1)]
-    [InlineData("６【電子限定特典付き】", 6)]
-    [InlineData("スタジオカバナ９【電子限定特典付き】", 9)]
-    [InlineData("(1)【電子限定特典付】", 1)]
-    [InlineData("（２）【電子限定特典付き】", 2)]
-    [InlineData("(Volume) 隣のステラ（１）", 1)]
-    [InlineData("(Volume) やわはだに春雷(3)", 3)]
-    public void Reads_ebook_volume_editions_as_volumes(string input, int volume)
-    {
-        var result = ChapterNumberParser.Parse(input);
-        Assert.Null(result.Number);
-        Assert.Equal(volume, result.Volume);
-        Assert.False(result.IsOneShot);
-    }
-
-    [Theory]
-    [InlineData("隣のステラ（２）")]
-    [InlineData("（４）")]
-    [InlineData("twinkle episode ナイト")]
-    public void A_title_with_a_bracketed_number_and_no_marker_is_not_a_volume(string input)
-    {
-        var result = ChapterNumberParser.Parse(input);
-        Assert.Null(result.Volume);
-        Assert.True(result.IsOneShot);
-    }
-
-    [Fact]
-    public void A_chapter_with_a_bonus_note_stays_a_chapter()
-    {
-        var result = ChapterNumberParser.Parse("第3話【電子限定特典付き】");
-        Assert.Equal(3m, result.Number);
-        Assert.Null(result.Volume);
-    }
-
-    [Theory]
     [InlineData("1巻", 1)]
     [InlineData("12巻", 12)]
+    [InlineData("第3巻", 3)]
     public void Reads_japanese_volume_labels_as_volumes(string input, int volume)
     {
         var result = ChapterNumberParser.Parse(input);
         Assert.Null(result.Number);
         Assert.Equal(volume, result.Volume);
         Assert.False(result.IsOneShot);
+    }
+
+    [Fact]
+    public void A_label_that_only_mentions_a_volume_stays_a_special()
+    {
+        var result = ChapterNumberParser.Parse("2巻発売記念 特別編");
+        Assert.Null(result.Volume);
+        Assert.True(result.IsOneShot);
     }
 
     [Theory]
@@ -116,6 +82,10 @@ public class ChapterNumberParserTests
     [InlineData("第2話①", 2, 1, 2.1)]
     [InlineData("第2話②", 2, 2, 2.2)]
     [InlineData("第9話 -1", 9, 1, 9.1)]
+    [InlineData("第5話 前編", 5, 1, 5.1)]
+    [InlineData("第5話 後編", 5, 3, 5.3)]
+    [InlineData("第69話➁　ド派手な初陣", 69, 2, 69.2)]
+    [InlineData("第2.5話(1)", 2.5, 1, 2.51)]
     public void Reads_the_part_of_a_split_chapter(string input, double number, int part, double withPart)
     {
         var result = ChapterNumberParser.Parse(input);
@@ -128,17 +98,26 @@ public class ChapterNumberParserTests
     [InlineData("第12話")]
     [InlineData("Ch. 10")]
     [InlineData("第14話 ピュアでいられない大谷くん")]
+    [InlineData("第3話 2024-05")]
+    [InlineData("第5話 Lv(10)")]
+    [InlineData("第5話（12）")]
+    [InlineData("Ch. 5 - 3 Little Pigs")]
+    [InlineData("Ch. 10-11")]
     public void A_whole_chapter_has_no_part(string input)
     {
         var result = ChapterNumberParser.Parse(input);
         Assert.Null(result.Part);
+        Assert.NotNull(result.Number);
         Assert.Equal(result.Number, result.NumberWithPart);
     }
 
     [Fact]
-    public void A_part_past_nine_has_no_decimal_of_its_own()
+    public void A_numbered_part_under_a_part_word_is_the_hundredths()
     {
-        Assert.Null(ChapterNumberParser.Parse("第5話（12）").NumberWithPart);
+        var result = ChapterNumberParser.Parse("第60話 後編②　エリオール大森林の永久凍土");
+        Assert.Equal(3, result.Part);
+        Assert.Equal(2, result.SubPart);
+        Assert.Equal(60.32m, result.NumberWithPart);
     }
 
     [Theory]
@@ -291,4 +270,52 @@ public class ChapterNumberParserTests
     {
         Assert.Equal(3, ChapterNumberParser.Parse("12", "\uFF13").Volume);
     }
+
+    [Theory]
+    [InlineData("１【電子限定特典付き】", 1)]
+    [InlineData("６【電子限定特典付き】", 6)]
+    [InlineData("スタジオカバナ９【電子限定特典付き】", 9)]
+    [InlineData("(1)【電子限定特典付】", 1)]
+    [InlineData("（２）【電子限定特典付き】", 2)]
+    [InlineData("(Volume) 隣のステラ（１）", 1)]
+    [InlineData("(Volume) やわはだに春雷(3)", 3)]
+    public void Reads_ebook_volume_editions_as_volumes(string input, int volume)
+    {
+        var result = ChapterNumberParser.Parse(input);
+        Assert.Null(result.Number);
+        Assert.Equal(volume, result.Volume);
+        Assert.False(result.IsOneShot);
+    }
+
+    [Theory]
+    [InlineData("隣のステラ（２）")]
+    [InlineData("（４）")]
+    [InlineData("twinkle episode ナイト")]
+    public void A_title_with_a_bracketed_number_and_no_marker_is_not_a_volume(string input)
+    {
+        var result = ChapterNumberParser.Parse(input);
+        Assert.Null(result.Volume);
+        Assert.True(result.IsOneShot);
+    }
+
+    [Fact]
+    public void A_chapter_with_a_bonus_note_stays_a_chapter()
+    {
+        var result = ChapterNumberParser.Parse("第3話【電子限定特典付き】");
+        Assert.Equal(3m, result.Number);
+        Assert.Null(result.Volume);
+    }
+
+    [Theory]
+    [InlineData("20251030")]
+    [InlineData("第20251030話")]
+    [InlineData("Ch. 10000")]
+    public void A_number_that_is_a_date_or_an_id_is_not_a_chapter(string input)
+    {
+        Assert.Null(ChapterNumberParser.Parse(input).Number);
+    }
+
+    [Fact]
+    public void The_largest_real_chapter_numbers_still_parse() =>
+        Assert.Equal(9999m, ChapterNumberParser.Parse("Ch. 9999").Number);
 }

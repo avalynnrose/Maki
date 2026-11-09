@@ -303,41 +303,31 @@ public sealed partial class SuwayomiSource(
         return id;
     }
 
+    /// <summary>
+    /// Fetches the pages, telling a chapter that wants a login or a purchase from any other failure.
+    /// Suwayomi carries the extension's own error text and nothing structured, so this reads the English
+    /// wording extensions use ("log in via WebView", or "purchase" next to "chapter", "volume" or "episode").
+    /// An extension that words it another way is not recognised and fails like any other source error.
+    /// </summary>
     private async Task<(IReadOnlyList<string> Pages, string? PagesFor)> PagesAsync(int chapterId, CancellationToken ct)
     {
         try
         {
             return await client.FetchPagesAsync(chapterId, ct);
         }
-        catch (SuwayomiGraphQlException ex) when (
-            ex.Message.Contains("purchase", StringComparison.OrdinalIgnoreCase) ||
-            ex.Message.Contains("log in via webview", StringComparison.OrdinalIgnoreCase))
+        catch (SuwayomiGraphQlException ex) when (WantsLoginOrPurchase(ex.Message))
         {
             throw new ChapterRequiresPurchaseException(ex.Message);
         }
     }
 
-    /// <summary>
-    /// The label wins when it names a chapter: some extensions number their rows by position, so
-    /// "第2話①" and "第2話②" arrive as 3 and 4 and match nothing. The extension's own number is used
-    /// when the label gives none, and a volume label stays a volume whatever number the extension sent.
-    /// </summary>
-    private static decimal? NumberOf(SuwayomiChapter chapter, ParsedChapter parsed)
-    {
-        if (parsed.Number is not null)
-        {
-            return parsed.NumberWithPart;
-        }
+    private static bool WantsLoginOrPurchase(string message) =>
+        message.Contains("log in via webview", StringComparison.OrdinalIgnoreCase) || PurchaseNotice().IsMatch(message);
 
-        if (parsed is { Volume: not null })
-        {
-            return null;
-        }
-
-        return chapter.ChapterNumber is >= 0 and < (double)ChapterNumberParser.MaxChapterNumber
-            ? (decimal)chapter.ChapterNumber
-            : null;
-    }
+    // "purchase this chapter", "Please PURCHASE this volume to read": the word on its own, next to what is for sale.
+    // "purchase history" or a host name containing the word is not a notice about this chapter.
+    [GeneratedRegex(@"\bpurchase\b[^.]*\b(?:chapter|volume|episode)\b|\b(?:chapter|volume|episode)\b[^.]*\bpurchase\b", RegexOptions.IgnoreCase)]
+    private static partial Regex PurchaseNotice();
 
     private SourceChapter ToSourceChapter(SuwayomiChapter chapter, string seriesUrl, string language)
     {
@@ -354,6 +344,28 @@ public sealed partial class SuwayomiSource(
             chapter.UploadDate > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(chapter.UploadDate).UtcDateTime : null,
             chapter.RealUrl,
             string.IsNullOrWhiteSpace(chapter.Scanlator) ? null : chapter.Scanlator.Trim());
+    }
+
+    /// <summary>
+    /// The label wins when it names a chapter, parts included: some extensions number their rows by
+    /// position, so "第2話①" and "第2話②" arrive as 3 and 4 and match nothing. The extension's own number
+    /// is used when the label gives none, and a volume label stays a volume whatever number the extension sent.
+    /// </summary>
+    private static decimal? NumberOf(SuwayomiChapter chapter, ParsedChapter parsed)
+    {
+        if (parsed.Number is not null)
+        {
+            return parsed.NumberWithPart;
+        }
+
+        if (parsed is { Volume: not null })
+        {
+            return null;
+        }
+
+        return chapter.ChapterNumber is >= 0 and < (double)ChapterNumberParser.MaxChapterNumber
+            ? (decimal)chapter.ChapterNumber
+            : null;
     }
 
     /// <summary>The part of a Mihon chapter name after its number, "Vol.3 Ch.15 - The Fight" giving "The Fight".</summary>

@@ -27,6 +27,7 @@ import type {
   TorrentProposalDto,
   UpgradeProfileDto,
 } from '../../../src/api/upgrades'
+import type { SeriesConversion, UndoConversionResult } from '../../../src/api/pageConversion'
 import { catalogue, seriesById, type CatalogueEntry } from '../shared'
 import { cover, daysAgo, hoursAgo } from '../api'
 
@@ -147,6 +148,8 @@ export function seriesDto(id: number, overrides: Partial<SeriesDto> = {}): Serie
     tagIds: entry.id % 2 === 1 ? [1, 2] : [3],
     monitored: entry.status === 'Ongoing',
     monitorNewItems: 'all',
+    archivedAt: null,
+    archivedByUserId: null,
     rootFolderId: entry.type === 'Manhwa' ? 2 : 1,
     folderName: entry.title,
     rootFolderPath: `/library/${entry.type === 'Manhwa' ? 'manhwa' : 'manga'}/${entry.title}`,
@@ -169,6 +172,7 @@ export function seriesDto(id: number, overrides: Partial<SeriesDto> = {}): Serie
     removedChapterCount: 0,
     readFileCleanup: 'Default',
     readFileCleanupActive: false,
+    pageConversion: 'Default',
     knownChapterCount: entry.chapters,
     queuedCount: 0,
     downloadingCount: 0,
@@ -212,6 +216,8 @@ export interface ChapterShape {
   upgradeable?: number
   /** Cap the chapter count so a story with a long series stays cheap to render. */
   limit?: number
+  /** Chapter numbers whose file record the health scan found gone from disk. */
+  fileMissing?: number[]
 }
 
 export function chaptersFor(id: number, shape: ChapterShape = {}): ChapterDto[] {
@@ -219,6 +225,7 @@ export function chaptersFor(id: number, shape: ChapterShape = {}): ChapterDto[] 
   const count = Math.min(entry.chapters, shape.limit ?? entry.chapters)
   const missing = new Set(shape.missing ?? [])
   const unwanted = new Set(shape.unwanted ?? [])
+  const fileMissing = new Set(shape.fileMissing ?? [])
   const trailing = shape.trailingMissing ?? Math.max(0, count - Math.round(count * 0.92))
   const numbers: number[] = []
   for (let n = 1; n <= count; n++) numbers.push(n)
@@ -241,7 +248,10 @@ export function chaptersFor(id: number, shape: ChapterShape = {}): ChapterDto[] 
       wanted: !unwanted.has(n),
       hasFile,
       fileRemovedAt: null,
+      fileAutoRemoved: false,
+      fileMissing: hasFile && fileMissing.has(n),
       fileDeleteDueAt: null,
+      delistedAt: null,
       filePath: hasFile ? `/library/manga/${entry.title}/${entry.title} - Ch.${n}.cbz` : null,
       fileSourceName: hasFile ? sourceKey(entry) : null,
       fileReleaseName: null,
@@ -922,3 +932,21 @@ export const resolvedSourceUrl: ResolvedSourceUrl = {
   url: 'https://comick.example/comic/a1',
   coverUrl: cover(1),
 }
+
+export const seriesConversionNone = {
+  convertedFiles: 0,
+  savedBytes: 0,
+  restorableFiles: 0,
+  restorableBytes: 0,
+  checkedWith: [],
+} satisfies SeriesConversion
+
+export const seriesConversionRestorable = {
+  convertedFiles: 64,
+  savedBytes: 3_221_225_472,
+  restorableFiles: 48,
+  restorableBytes: 2_684_354_560,
+  checkedWith: ['webp:high', 'avif:balanced+png'],
+} satisfies SeriesConversion
+
+export const undoRestored = { restored: 48, skipped: 0, reasons: [] } satisfies UndoConversionResult

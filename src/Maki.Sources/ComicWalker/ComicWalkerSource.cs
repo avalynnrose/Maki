@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Maki.Core.Parsing;
 using Maki.Core.Sources;
 using Maki.Sources.Common;
 
@@ -29,7 +30,7 @@ public partial class ComicWalkerSource(IHttpClientFactory httpClientFactory) : I
     public string Name => "comicwalker";
     public string DisplayName => "KadoComi (Comic Walker)";
     public string BaseUrl => "https://comic-walker.com";
-    public SourceCapabilities Capabilities => SourceCapabilities.None;
+    public SourceCapabilities Capabilities => SourceCapabilities.FreeWindowListing;
     public SourceKind Kind => SourceKind.Official;
     /// <summary>The API gives the episode's <c>updateDate</c>, not its publication.</summary>
     public bool ReleaseDatesAreReliable => false;
@@ -189,7 +190,7 @@ public partial class ComicWalkerSource(IHttpClientFactory httpClientFactory) : I
                 sourceSeriesId,
                 id,
                 episodeTitle,
-                ComicWalkerChapterNumber.Parse(episodeTitle),
+                ChapterNumberParser.Parse(episodeTitle).NumberWithPart,
                 Volume: null,
                 Title: displayTitle,
                 Language: language,

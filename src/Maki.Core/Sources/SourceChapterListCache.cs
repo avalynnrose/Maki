@@ -77,6 +77,13 @@ public sealed class SourceChapterListCache(TimeProvider time, ILogger<SourceChap
             ct);
     }
 
+    /// <summary>The cached listing while it is fresh, without fetching one.</summary>
+    public IReadOnlyList<SourceChapter>? TryGetFresh(ISource source, string sourceSeriesId, string? languageFilter) =>
+        _entries.TryGetValue(Key(source, sourceSeriesId, languageFilter), out var entry) &&
+        IsFresh(entry, time.GetUtcNow().UtcDateTime)
+            ? entry.Chapters
+            : null;
+
     /// <summary>
     /// Records a listing somebody else already fetched. <c>ChapterSyncService</c> deliberately lists
     /// uncached, since a refresh has to see the site as it is right now, but a monitored refresh
@@ -87,6 +94,22 @@ public sealed class SourceChapterListCache(TimeProvider time, ILogger<SourceChap
     public void Store(
         ISource source, string sourceSeriesId, string? languageFilter, IReadOnlyList<SourceChapter> chapters) =>
         Fill(_entries.GetOrAdd(Key(source, sourceSeriesId, languageFilter), _ => new Entry(time)), chapters);
+
+    /// <summary>
+    /// Forgets every listing of one source, for a source whose definition just changed: a listing the
+    /// old one made could carry chapter ids the new one no longer produces.
+    /// </summary>
+    public void EvictSource(string sourceName)
+    {
+        var prefix = sourceName + " ";
+        foreach (var key in _entries.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                _entries.TryRemove(key, out _);
+            }
+        }
+    }
 
     private static string Key(ISource source, string sourceSeriesId, string? languageFilter) =>
         $"{source.Name} {sourceSeriesId} {languageFilter ?? string.Empty}";
@@ -103,26 +126,35 @@ public sealed class SourceChapterListCache(TimeProvider time, ILogger<SourceChap
         entry.Chapters is not null && now - entry.FetchedAt < Ttl;
 
     /// <summary>
+    /// Drops every expired listing nothing is fetching, and returns how many went. An expired
+    /// listing is never served again, so keeping it only holds a whole series' chapter list:
+    /// before this ran below the cap, every series the scout or a measure pass had listed stayed
+    /// in memory until the cache reached 512 entries.
+    /// </summary>
+    public int DropExpired()
+    {
+        var now = time.GetUtcNow().UtcDateTime;
+        var dropped = 0;
+        foreach (var (key, entry) in _entries)
+        {
+            // Skip an entry whose gate is held: a fetch is in flight against it, and dropping it now
+            // would only make the next caller start a second one.
+            if (!IsFresh(entry, now) && !entry.Flight.Busy && _entries.TryRemove(key, out _))
+            {
+                dropped++;
+            }
+        }
+
+        return dropped;
+    }
+
+    /// <summary>
     /// Evicts expired entries, then the least recently used ones if still over the cap. Runs only
     /// after a listing lands, never on the cache-hit path.
     /// </summary>
     private void Trim()
     {
-        if (_entries.Count <= MaxEntries)
-        {
-            return;
-        }
-
-        var now = time.GetUtcNow().UtcDateTime;
-        foreach (var (key, entry) in _entries)
-        {
-            // Skip an entry whose gate is held: a fetch is in flight against it, and dropping it now
-            // would only make the next caller start a second one.
-            if (!IsFresh(entry, now) && !entry.Flight.Busy)
-            {
-                _entries.TryRemove(key, out _);
-            }
-        }
+        DropExpired();
 
         if (_entries.Count > MaxEntries)
         {
@@ -134,8 +166,8 @@ public sealed class SourceChapterListCache(TimeProvider time, ILogger<SourceChap
             {
                 _entries.TryRemove(key, out _);
             }
-        }
 
-        logger.LogDebug("Trimmed chapter-list cache to {Count} entries", _entries.Count);
+            logger.LogDebug("Trimmed chapter-list cache to {Count} entries", _entries.Count);
+        }
     }
 }

@@ -1,5 +1,5 @@
 import { errorText } from '../api/errorText'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -11,6 +11,7 @@ import {
   Group,
   Image,
   Loader,
+  Menu,
   Modal,
   MultiSelect,
   NumberInput,
@@ -22,13 +23,15 @@ import {
   Table,
   Text,
   TextInput,
-  Title,
   Tooltip,
   VisuallyHidden,
 } from '@mantine/core'
 import {
   IconAlertTriangle,
+  IconChevronDown,
+  IconChevronUp,
   IconColumns,
+  IconDots,
   IconRuler,
   IconExternalLink,
   IconLink,
@@ -38,10 +41,10 @@ import {
   IconRefresh,
   IconTrash,
   IconWand,
-} from '@tabler/icons-react'
+} from '../lib/icons'
 import { useDebouncedValue } from '@mantine/hooks'
 import { useQueryClient } from '@tanstack/react-query'
-import { notifications } from '@mantine/notifications'
+import { notifications } from '../lib/toast'
 import {
   useAutoMatchSources,
   useCreateMapping,
@@ -59,7 +62,8 @@ import {
   type SourceOrderMode,
 } from '../api/hooks'
 import { MeasureProgress, MeasureResult, ScoutCell } from './SourceMeasurePanel'
-import type { SourceMappingDto } from '../api/types'
+import type { LocalizedTitle, SourceMappingDto } from '../api/types'
+import { englishSearchTitles } from '../api/titles'
 import {
   QUALITY_TIER_COLOR,
   QUALITY_TIER_LABELS,
@@ -80,9 +84,12 @@ import { msg, t as now, plural } from '@lingui/core/macro'
 import type { MessageDescriptor } from '@lingui/core'
 import { useLabel } from '../i18n-context'
 import { pressable } from '../lib/pressable'
-import { SOURCE_ICONS } from '../sourceIcons'
+import { SOURCE_ICONS, sourceHost } from '../sourceIcons'
+import { ApiError } from '../api/client'
+import { ManageSourcesModal, type WizardRequest } from '../pages/settings/ManageSourcesModal'
 import { useSourceLabel } from '../sourceLabels'
 import { MonoValue } from './ui/MonoValue'
+import { PanelTitle } from './ui/PanelTitle'
 
 const ORIGIN_LABELS: Record<string, MessageDescriptor> = {
   TitleSearch: msg`Title search`,
@@ -90,9 +97,13 @@ const ORIGIN_LABELS: Record<string, MessageDescriptor> = {
   Manual: msg`Manual`,
 }
 
+const HEADER_TIP_EVENTS = { hover: true, focus: true, touch: true }
+
+const menuHint = { display: 'block', mt: 2, size: 'xs', fw: 400, lh: 1.4, c: 'var(--ink-3)' } as const
+
 const ORIGIN_COLORS: Record<string, string> = {
   TitleSearch: 'var(--info)',
-  CrossId: 'var(--watched)',
+  CrossId: 'var(--ok)',
   Manual: 'var(--ok)',
   Unknown: 'var(--neutral)'
 }
@@ -100,10 +111,13 @@ const ORIGIN_COLORS: Record<string, string> = {
 export function SourceMappingsSection({
   seriesId,
   seriesTitle,
+  altTitles = [],
   matching = false,
 }: {
   seriesId: number
   seriesTitle: string
+  /** Offered as one-click searches in the link modal, since a source may list the work under one. */
+  altTitles?: LocalizedTitle[]
   /**
    * Auto-matching is still running in the background (a series added seconds ago). Without it a
    * fresh series reads "No sources linked. Chapters cannot be synced or downloaded." for the half
@@ -165,9 +179,12 @@ export function SourceMappingsSection({
   const failedNames = failedSources.map(sourceLabel).join(', ')
   const [modalOpen, setModalOpen] = useState(false)
   const [compareOpen, setCompareOpen] = useState(false)
+  const hintId = useId()
   const [sourceName, setSourceName] = useState<string | null>(null)
   const [query, setQuery] = useState(seriesTitle)
+  const otherEnglishTitles = useMemo(() => englishSearchTitles(altTitles, seriesTitle), [altTitles, seriesTitle])
   const [removing, setRemoving] = useState<SourceMappingDto | null>(null)
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({})
   const removingSourceName = removing ? sourceLabel(removing.sourceName) : undefined
   const [deleteFiles, setDeleteFiles] = useState(false)
   const [fallbackOpen, setFallbackOpen] = useState(false)
@@ -183,6 +200,14 @@ export function SourceMappingsSection({
     isFetching: resolving,
     error: resolveError,
   } = useResolveSourceUrl(pastedUrl)
+  // No source knows the pasted address: an admin can set the site up as a custom source right here,
+  // or fix the one that already reads that host but whose series template didn't match.
+  const [setupSite, setSetupSite] = useState<WizardRequest | null>(null)
+  const unrecognised = resolveError instanceof ApiError && resolveError.code === 'error.search.noSourceRecognizesUrl'
+  const pastedHost = pastedUrl ? sourceHost(pastedUrl) : null
+  const ownerOfHost = pastedHost
+    ? sources?.find((s) => s.custom && sourceHost(s.baseUrl) === pastedHost) ?? null
+    : null
 
   // A source switched off in Settings can't be linked, and its existing mappings here are
   // inert: their own on/off state is kept and shown read-only rather than being rewritten.
@@ -231,7 +256,8 @@ export function SourceMappingsSection({
     ) ?? []
   const missingSnapshotNames = missingSnapshots.map((m) => sourceLabel(m.sourceName)).join(', ')
 
-  const link = (mappingName: string, sourceSeriesId: string, url: string) =>
+  const link = (mappingName: string, sourceSeriesId: string, url: string) => {
+    if (createMapping.isPending) return
     createMapping.mutate(
       { seriesId, sourceName: mappingName, sourceSeriesId, url },
       {
@@ -242,20 +268,20 @@ export function SourceMappingsSection({
         },
       },
     )
+  }
 
   return (
     <>
       <Group justify="space-between">
-        <Group gap={8}>
-          <IconPlugConnected size={18} style={{ opacity: 0.7 }} />
-          <Title order={3} size="h4" fz="var(--type-subhead)"><Trans>Sources</Trans></Title>
-        </Group>
+        <PanelTitle icon={IconPlugConnected}>
+          <Trans>Sources</Trans>
+        </PanelTitle>
         {/* Both held while auto-matching runs: (SeriesId, SourceName) is unique, so a hand-linked
             source that the matcher is about to add itself fails its whole batch of mappings. */}
         <Group gap="xs">
           {sourceOrder && (
             <Tooltip
-              label={t`Which source a chapter downloads from first. Best quality ranks sources by this series' quality profile and what their recent chapters measured, with priority breaking ties.`}
+              label={t`Which source a chapter downloads from first.`}
               withArrow
               multiline
               w={280}
@@ -284,6 +310,27 @@ export function SourceMappingsSection({
             </Tooltip>
           )}
           <Tooltip
+            label={t`Auto-matching is still running. It'll be free in a moment.`}
+            withArrow
+            disabled={!matching}
+          >
+            <Box component="span" display="inline-flex">
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconLink size={16} />}
+                disabled={matching || nothingLeftToMatch}
+                onClick={() => {
+                  setSourceName(unmappedSources?.[0]?.name ?? null)
+                  setQuery(seriesTitle)
+                  setModalOpen(true)
+                }}
+              >
+                <Trans>Link source</Trans>
+              </Button>
+            </Box>
+          </Tooltip>
+          <Tooltip
             label={
               matching
                 ? t`Auto-matching is already running.`
@@ -299,7 +346,7 @@ export function SourceMappingsSection({
               <Button
                 size="xs"
                 variant="default"
-                leftSection={<IconWand size={14} />}
+                leftSection={<IconWand size={16} />}
                 disabled={matching || nothingLeftToMatch}
                 loading={autoMatch.isPending}
                 onClick={() =>
@@ -315,76 +362,45 @@ export function SourceMappingsSection({
               </Button>
             </Box>
           </Tooltip>
-          <Tooltip
-            label={
-              matching
-                ? t`Auto-matching is still running. It'll be free in a moment.`
-                : comparable < 2
-                  ? t`Needs at least two enabled sources to compare.`
-                  : t`Fetch a sample of the same chapter from each source and rank them by scan quality.`
-            }
-            withArrow
-            multiline
-            w={240}
-          >
-            <Box component="span" display="inline-flex">
-              <Button
-                size="xs"
-                variant="default"
-                leftSection={<IconColumns size={14} />}
+          <Menu position="bottom-end" width={280} withinPortal>
+            <Menu.Target>
+              <ActionIcon variant="default" size={30} aria-label={t`More source actions`}>
+                {scouting || measureSources.isPending ? <Loader size={12} /> : <IconDots size={16} />}
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconColumns size={16} />}
                 disabled={matching || comparable < 2}
                 onClick={() => setCompareOpen(true)}
+                aria-describedby={`${hintId}-compare`}
               >
                 <Trans>Compare</Trans>
-              </Button>
-            </Box>
-          </Tooltip>
-          <Tooltip
-            label={
-              matching
-                ? t`Auto-matching is still running. It'll be free in a moment.`
-                : scout && !scout.running
-                  ? t`Sample a few pages from three chapters on every enabled source and update each source's quality. Last run measured ${scoutMeasured} of ${scoutPlanned} samples.`
-                  : t`Sample a few pages from three chapters on every enabled source and update each source's quality.`
-            }
-            withArrow
-            multiline
-            w={260}
-          >
-            <Box component="span" display="inline-flex">
-              <Button
-                size="xs"
-                variant="default"
-                leftSection={scouting ? <Loader size={12} /> : <IconRuler size={14} />}
-                disabled={matching || scouting || (mappings?.length ?? 0) === 0}
-                loading={measureSources.isPending}
+                <Text component="span" id={`${hintId}-compare`} aria-hidden {...menuHint}>
+                  {matching
+                    ? t`Auto-matching is still running. It'll be free in a moment.`
+                    : comparable < 2
+                      ? t`Needs at least two enabled sources to compare.`
+                      : t`Fetch a sample of the same chapter from each source and rank them by scan quality.`}
+                </Text>
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconRuler size={16} />}
+                disabled={matching || scouting || measureSources.isPending || (mappings?.length ?? 0) === 0}
                 onClick={() => measureSources.mutate()}
+                aria-describedby={`${hintId}-measure`}
               >
                 {scouting ? <Trans>Measuring…</Trans> : <Trans>Measure</Trans>}
-              </Button>
-            </Box>
-          </Tooltip>
-          <Tooltip
-            label={t`Auto-matching is still running. It'll be free in a moment.`}
-            withArrow
-            disabled={!matching}
-          >
-            <Box component="span" display="inline-flex">
-              <Button
-                size="xs"
-                variant="light"
-                leftSection={<IconLink size={14} />}
-                disabled={matching || nothingLeftToMatch}
-                onClick={() => {
-                  setSourceName(unmappedSources?.[0]?.name ?? null)
-                  setQuery(seriesTitle)
-                  setModalOpen(true)
-                }}
-              >
-                <Trans>Link source</Trans>
-              </Button>
-            </Box>
-          </Tooltip>
+                <Text component="span" id={`${hintId}-measure`} aria-hidden {...menuHint}>
+                  {matching
+                    ? t`Auto-matching is still running. It'll be free in a moment.`
+                    : scout && !scout.running
+                      ? t`Sample a few pages from three chapters on every enabled source and update each source's quality. Last run measured ${scoutMeasured} of ${scoutPlanned} samples.`
+                      : t`Sample a few pages from three chapters on every enabled source and update each source's quality.`}
+                </Text>
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
         </Group>
       </Group>
 
@@ -425,7 +441,7 @@ export function SourceMappingsSection({
 
       {!matching && failedSources.length > 0 && (
         <Alert
-          color="yellow"
+          color="var(--warn)"
           variant="light"
           mb="sm"
           icon={<IconAlertTriangle size={16} />}
@@ -457,22 +473,28 @@ export function SourceMappingsSection({
             <Table.Tr>
               <Table.Th><Trans>Source</Trans></Table.Th>
               <Table.Th w={84}><Trans>Languages</Trans></Table.Th>
-              <Table.Th w={84}><Trans>Priority</Trans></Table.Th>
-              <Table.Th w={120}><Trans>Quality</Trans></Table.Th>
-              {/* Icon-only: the label survives for assistive tech via VisuallyHidden. */}
-              <Table.Th w={40}>
-                <VisuallyHidden><Trans>Enabled</Trans></VisuallyHidden>
-                <IconPower size={14} style={{ opacity: 0.7 }} aria-hidden />
+              <Table.Th w={76}><Trans>Priority</Trans></Table.Th>
+              <Table.Th w={112}><Trans>Quality</Trans></Table.Th>
+              <Table.Th w={48} ta="center">
+                <Tooltip label={t`Enabled for this series`} withArrow events={HEADER_TIP_EVENTS}>
+                  <span className="sources-table-icon-head" tabIndex={0}>
+                    <VisuallyHidden><Trans>Enabled</Trans></VisuallyHidden>
+                    <IconPower size={16} aria-hidden />
+                  </span>
+                </Tooltip>
               </Table.Th>
-              <Table.Th w={36}><VisuallyHidden><Trans>Actions</Trans></VisuallyHidden></Table.Th>
+              <Table.Th w={80}><VisuallyHidden><Trans>Actions</Trans></VisuallyHidden></Table.Th>
             </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {(orderedMappings ?? []).map((m) => {
               const { sourceName: sourceKey } = m
               const sourceName = sourceLabel(sourceKey)
+              const open = expanded[m.id] ?? false
+              const detailsId = `${hintId}-details-${m.id}`
               return (
-              <Table.Tr key={m.id}>
+              <Fragment key={m.id}>
+              <Table.Tr>
                 <Table.Td>
                   <Group gap="xs" wrap="nowrap">
                     {SOURCE_ICONS[m.sourceName] && (
@@ -488,9 +510,16 @@ export function SourceMappingsSection({
                             }}
                         />
                     )}
-                    <Stack gap={0} miw={0}>
-                      <Group gap={6} wrap="nowrap">
-                        <Text fw={600} size="sm" truncate c={sourceDisabled(m.sourceName) ? 'var(--ink-3)' : undefined}>
+                    <Group gap={6} wrap="nowrap" miw={0}>
+                        <Text
+                          fw={600}
+                          size="sm"
+                          truncate
+                          c={sourceDisabled(m.sourceName) ? 'var(--ink-3)' : undefined}
+                          {...(m.url
+                            ? { component: 'a', href: m.url, target: '_blank', rel: 'noreferrer', className: 'source-name-link' }
+                            : {})}
+                        >
                           {sourceName}
                         </Text>
                         {sourceDisabled(m.sourceName) && (
@@ -503,33 +532,14 @@ export function SourceMappingsSection({
                             {renderLabel(ORIGIN_LABELS[m.origin] ?? m.origin)}
                           </Badge>
                         </Tooltip>}
-                      </Group>
-                      <Group gap={6} wrap="nowrap" miw={0}>
-                        <MonoValue
-                          value={m.sourceSeriesId}
-                          href={m.url ?? undefined}
-                          copy
-                          fz="var(--mantine-font-size-xs)"
-                        />
-                        <Text size="xs" c="var(--ink-3)" aria-hidden>·</Text>
-                        {m.lastError ? (
-                          <Tooltip label={m.lastError} withArrow>
+                        {m.lastError && (
+                          <Tooltip label={m.lastError} withArrow multiline w={280}>
                             <Text size="xs" c="var(--danger)" fw={600} style={{ flexShrink: 0 }}>
                               <Trans>Error</Trans>
                             </Text>
                           </Tooltip>
-                        ) : (
-                          <Text
-                            size="xs"
-                            c="var(--ink-3)"
-                            title={m.lastRefresh ? formatDateTime(m.lastRefresh) : undefined}
-                            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
-                          >
-                            {m.lastRefresh ? formatRecentDate(m.lastRefresh) : <Trans>never</Trans>}
-                          </Text>
                         )}
-                      </Group>
-                    </Stack>
+                    </Group>
                   </Group>
                 </Table.Td>
                 <Table.Td>
@@ -573,7 +583,7 @@ export function SourceMappingsSection({
                     )
                   })()}
                 </Table.Td>
-                <Table.Td>
+                <Table.Td ta="center">
                   <Tooltip
                     label={t`${sourceName} is switched off in Settings → Downloads → Sources. This series' setting is kept and applies again once it's back on.`}
                     withArrow
@@ -583,7 +593,7 @@ export function SourceMappingsSection({
                   >
                     {/* A disabled input fires no pointer events, so the tooltip has to hang off
                         a wrapper. Greyed, not flipped: the stored flag is left exactly as-is. */}
-                    <Box component="span" display="inline-flex">
+                    <Box component="span" display="inline-flex" style={{ verticalAlign: 'middle' }}>
                       <Switch
                         size="xs"
                         aria-label={t`${sourceName} enabled`}
@@ -597,19 +607,45 @@ export function SourceMappingsSection({
                   </Tooltip>
                 </Table.Td>
                 <Table.Td>
-                  <ActionIcon
-                    variant="subtle"
-                    color="var(--danger)"
-                    onClick={() => {
-                      setRemoving(m)
-                      setDeleteFiles(false)
-                    }}
-                    aria-label={t`Remove mapping`}
-                  >
-                    <IconTrash size={16} />
-                  </ActionIcon>
+                  <Group gap={0} wrap="nowrap" justify="flex-end">
+                  <Tooltip label={open ? t`Hide details` : t`Details`} withArrow>
+                    <ActionIcon
+                      variant="subtle"
+                      color="var(--neutral)"
+                      data-row-action=""
+                      aria-expanded={open}
+                      aria-controls={open ? detailsId : undefined}
+                      aria-label={t`Details for ${sourceName}`}
+                      onClick={() => setExpanded((prev) => ({ ...prev, [m.id]: !open }))}
+                    >
+                      {open ? <IconChevronUp size={19} /> : <IconChevronDown size={19} />}
+                    </ActionIcon>
+                  </Tooltip>
+                  <Tooltip label={t`Remove mapping`} withArrow>
+                    <ActionIcon
+                      variant="subtle"
+                      color="var(--danger)"
+                      data-row-action="danger"
+                      onClick={() => {
+                        setRemoving(m)
+                        setDeleteFiles(false)
+                      }}
+                      aria-label={t`Remove mapping`}
+                    >
+                      <IconTrash size={19} />
+                    </ActionIcon>
+                  </Tooltip>
+                  </Group>
                 </Table.Td>
               </Table.Tr>
+              {open && (
+                <Table.Tr id={detailsId} className="sources-table-details">
+                  <Table.Td colSpan={6}>
+                    <SourceMappingDetails mapping={m} />
+                  </Table.Td>
+                </Table.Tr>
+              )}
+              </Fragment>
               )
               })}
 
@@ -720,7 +756,7 @@ export function SourceMappingsSection({
                 <Button
                   size="xs"
                   variant="light"
-                  leftSection={<IconRefresh size={14} />}
+                  leftSection={<IconRefresh size={16} />}
                   loading={refreshSnapshots.isPending}
                   onClick={() => {
                     if (!removing) return
@@ -875,9 +911,28 @@ export function SourceMappingsSection({
               label={t`Search or paste a series URL`}
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
-              rightSection={isFetching || resolving ? <Loader size="xs" /> : null}
+              rightSection={isFetching || resolving || createMapping.isPending ? <Loader size="xs" /> : null}
             />
           </Group>
+          {createMapping.isPending && (
+            <Text size="xs" c="dimmed"><Trans>Linking and listing chapters…</Trans></Text>
+          )}
+          {otherEnglishTitles.length > 0 && (
+            <Group gap={6} wrap="wrap">
+              <Text size="xs" c="dimmed"><Trans>Search for</Trans></Text>
+              {[seriesTitle, ...otherEnglishTitles].map((title) => (
+                <Button
+                  key={title}
+                  size="compact-xs"
+                  variant={query.trim() === title ? 'light' : 'default'}
+                  onClick={() => setQuery(title)}
+                  maw="100%"
+                >
+                  <Text span size="xs" truncate>{title}</Text>
+                </Button>
+              ))}
+            </Group>
+          )}
           <Stack gap="xs">
             {pastedUrl && resolved && (
               <Card
@@ -912,6 +967,24 @@ export function SourceMappingsSection({
               <Text c="var(--danger)" size="sm">
                 {errorText(resolveError)}
               </Text>
+            )}
+            {pastedUrl && unrecognised && can('Admin') && (
+              <Group>
+                {ownerOfHost?.custom ? (
+                  <Button
+                    size="xs"
+                    variant="default"
+                    leftSection={<IconPencil size={16} />}
+                    onClick={() => setSetupSite({ editId: ownerOfHost.custom!.id })}
+                  >
+                    <Trans>Edit {ownerOfHost.displayName}</Trans>
+                  </Button>
+                ) : (
+                  <Button size="xs" variant="default" onClick={() => setSetupSite({ setupUrl: pastedUrl })}>
+                    <Trans>Set up this site as a source</Trans>
+                  </Button>
+                )}
+              </Group>
             )}
             {!pastedUrl && results?.map((r) => (
               <Card
@@ -967,7 +1040,49 @@ export function SourceMappingsSection({
         opened={compareOpen}
         onClose={() => setCompareOpen(false)}
       />
+      {can('Admin') && (
+        <ManageSourcesModal
+          opened={setupSite !== null}
+          onClose={() => setSetupSite(null)}
+          wizard={setupSite}
+          closeWithWizard
+          // The failed resolve is asked again, so the Link a source modal offers the new source.
+          onCustomSaved={() => void queryClient.invalidateQueries({ queryKey: ['resolve-source', pastedUrl] })}
+        />
+      )}
     </>
+  )
+}
+
+/** What a row keeps out of its own line: the id on the source, when its chapters were last checked, and the last error. */
+function SourceMappingDetails({ mapping }: { mapping: SourceMappingDto }) {
+  const checked = mapping.lastRefresh ? formatRecentDate(mapping.lastRefresh) : null
+  return (
+    // Sticky so the details stay in view when a narrow screen has the table scrolled sideways.
+    <Stack
+      gap={6}
+      py={4}
+      style={{ position: 'sticky', insetInlineStart: 8, width: 'fit-content', maxWidth: 'min(100%, calc(100vw - 112px))' }}
+    >
+      <Group gap="xs" wrap="nowrap" miw={0}>
+        <Text size="xs" c="var(--ink-3)" style={{ flexShrink: 0 }}>
+          <Trans>Source ID</Trans>
+        </Text>
+        <MonoValue value={mapping.sourceSeriesId} href={mapping.url ?? undefined} copy fz="var(--mantine-font-size-xs)" />
+      </Group>
+      <Text
+        size="xs"
+        c="var(--ink-3)"
+        title={mapping.lastRefresh ? formatDateTime(mapping.lastRefresh) : undefined}
+      >
+        {checked ? <Trans>Chapters last checked {checked}</Trans> : <Trans>Chapters never checked</Trans>}
+      </Text>
+      {mapping.lastError && (
+        <Text size="xs" c="var(--danger)">
+          {mapping.lastError}
+        </Text>
+      )}
+    </Stack>
   )
 }
 
@@ -992,7 +1107,8 @@ function MappingQuality({ quality, tier }: { quality: SourceQualityDto | undefin
           </Badge>
         </Tooltip>
       )}
-      <MappingMeasurement quality={quality} />
+      {/* Under a tier pill an unmeasured source shows nothing; the dash only fills an otherwise empty cell. */}
+      {(quality || !tier) && <MappingMeasurement quality={quality} />}
     </Stack>
   )
 }
@@ -1033,7 +1149,7 @@ function MappingMeasurement({ quality }: { quality: SourceQualityDto | undefined
     <Tooltip label={lines.join(' ')} withArrow multiline w={280}>
       <Text size="xs" c={quality.reliable ? undefined : 'var(--ink-3)'} style={{ whiteSpace: 'nowrap' }}>
         <Trans>
-          {width}px · {bpp} bpp
+          {width}px, {bpp} bpp
         </Trans>
       </Text>
     </Tooltip>
@@ -1150,13 +1266,13 @@ function MappingLanguages({
         </Tooltip>
         <Popover.Target>
           <ActionIcon
-            size="xs"
             variant="subtle"
             color="var(--ink-3)"
+            data-row-action
             aria-label={t`Change chapter languages for ${sourceName}`}
             style={{ flexShrink: 0 }}
           >
-            <IconPencil size={12} />
+            <IconPencil size={18} />
           </ActionIcon>
         </Popover.Target>
       </Group>

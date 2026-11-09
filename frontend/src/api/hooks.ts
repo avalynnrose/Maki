@@ -11,14 +11,26 @@ import type { MessageDescriptor } from '@lingui/core'
 import { ApiError, api, getInitialize, xsrfHeader } from './client'
 import { useSaveSettingsRecord } from './settingsRecord'
 import { useAuth } from '../auth/AuthProvider'
+import { useHubConnected } from './signalr'
 import type { AnimeResume } from './animeResume'
 import { affectedKeys } from './recommendationFeedback'
 import type { RequestSummaryDto, SourceReliabilityDto } from './stats'
 import type { IncognitoMode } from '../components/ui/incognito'
 import type { ReleaseParsedDto } from './upgrades'
 import { obtainedCount } from '../lib/chapterCounts'
+import { optimisticMerge, optimisticSeries } from './optimistic'
+import { activeSeries } from '../lib/series'
+import { isProvisional, ratesProvisionally } from '../lib/rating'
+import { askSoFarSync } from '../lib/soFarSyncAsk'
 import type {
   AddSeriesRequest,
+  ArchivePreview,
+  ArchiveSeriesRequest,
+  ArchiveSeriesResponse,
+  BulkArchiveSeriesRequest,
+  BulkArchiveSeriesResponse,
+  RestoreSeriesRequest,
+  RestoreSeriesResponse,
   ChapterDto,
   LocalizedTitle,
   CompareSnapshot,
@@ -50,18 +62,20 @@ import type {
   TagDto,
   UpdateSettingsDto,
   UpdateStatusDto,
+  HostInfoDto,
 } from './types'
 
+const seriesListQuery = {
+  queryKey: ['series'],
+  queryFn: () => api<SeriesDto[]>('/series'),
+  // Mounted by the palette, Home, Library, Discover and the rails on a series page, so with the
+  // default of 0 every navigation refetched the whole list. Mutations and the live import events
+  // invalidate it, and invalidation ignores staleTime, so this only skips redundant remounts.
+  staleTime: 30_000,
+} as const
+
 export function useSeries(enabled = true) {
-  return useQuery({
-    queryKey: ['series'],
-    queryFn: () => api<SeriesDto[]>('/series'),
-    enabled,
-    // Mounted by the palette, Home, Library, Discover and the rails on a series page, so with the
-    // default of 0 every navigation refetched the whole list. Mutations and the live import events
-    // invalidate it, and invalidation ignores staleTime, so this only skips redundant remounts.
-    staleTime: 30_000,
-  })
+  return useQuery({ ...seriesListQuery, enabled })
 }
 
 /**
@@ -91,7 +105,7 @@ export interface LibraryStats {
 export function useLibraryStats(): LibraryStats {
   const { data: series } = useSeries()
   return useMemo(() => {
-    const list = series ?? []
+    const list = activeSeries(series ?? [])
     let downloaded = 0
     let missing = 0
     let monitored = 0
@@ -113,33 +127,7 @@ export function useLibraryStats(): LibraryStats {
   }, [series])
 }
 
-/** Maps a catalogue (MangaBaka) item to the library series id that owns it, or null. */
-export function useSeriesIdLookup() {
-  const { data: library } = useSeries()
-  const seriesIdByMangaBaka = useMemo(() => {
-    const map = new Map<number, number>()
-    for (const s of library ?? []) {
-      if (s.mangaBakaId != null) map.set(s.mangaBakaId, s.id)
-    }
-    return map
-  }, [library])
-  return (item: RecommendationItem) =>
-    seriesIdByMangaBaka.get(Number(item.providerId)) ?? null
-}
-
-/** Maps a MangaBaka id to the poster of the library series that owns it, or null. */
-export function useLibraryCoverLookup() {
-  const { data: library } = useSeries()
-  const coverByMangaBaka = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const s of library ?? []) {
-      if (s.mangaBakaId != null && s.coverUrl) map.set(s.mangaBakaId, s.coverUrl)
-    }
-    return map
-  }, [library])
-  return (mangaBakaId: string | null | undefined) =>
-    mangaBakaId ? coverByMangaBaka.get(Number(mangaBakaId)) ?? null : null
-}
+export { useHasLibrary, useLibraryCoverLookup, useSeriesIdLookup } from './seriesLookup'
 
 // When each series was first seen waiting on its match or link, for the polling backoff below.
 const pendingSince = new Map<number, number>()
@@ -586,7 +574,7 @@ export function useRecommendations(request: RecommendationRequest, enabled = tru
       })
     },
     initialPageParam: { page: 0, poolVersion: undefined as string | undefined },
-    getNextPageParam: (last) => (last.hasMore
+    getNextPageParam: (last) => (last?.hasMore
       ? { page: last.page + 1, poolVersion: last.poolVersion ?? undefined }
       : undefined),
     // A restart page is the server saying the pool changed under us and handing back the new one
@@ -594,7 +582,7 @@ export function useRecommendations(request: RecommendationRequest, enabled = tru
     // it would show titles this reader hid or repeat ones the new pool ordered differently. Drop
     // those pages here rather than stopping at the restart: paging carries on from the new page 0.
     select: (data) => {
-      const restart = data.pages.findLastIndex((page) => page.restartRequired)
+      const restart = data.pages.findLastIndex((page) => page?.restartRequired)
       return restart <= 0
         ? data
         : { pages: data.pages.slice(restart), pageParams: data.pageParams.slice(restart) }
@@ -633,6 +621,10 @@ export interface DiscoverRail {
   /** Set on a custom catalogue rail, so "Show more" keeps its order and owned-series setting. */
   sort?: BrowseSort
   excludeOwned?: boolean
+  /** Set on the follow rail, so "Show more" also leaves out what the reader liked, disliked or marked seen. */
+  excludeInteracted?: boolean
+  /** Set on the follow rail, so "Show more" keeps its release window. */
+  releasedWithinMonths?: number
 }
 
 /** A seed series as the Discover page draws it: the title, the position, and which state that is. */
@@ -656,6 +648,10 @@ export interface DiscoverFeedRequest {
   sort?: BrowseSort
   /** Leave out series already in the library. */
   excludeOwned?: boolean
+  /** Leave out owned series and anything thumbed up or down, on top of the hidden, dismissed and seen ones every feed drops. */
+  excludeInteracted?: boolean
+  /** Only titles first published this many months back or later. */
+  releasedWithinMonths?: number
 }
 
 export type BrowseSort = 'popular' | 'rating' | 'newest' | 'oldest'
@@ -948,7 +944,7 @@ export function useCreditSuggestions(query: string, role?: string | null) {
   })
 }
 
-/** One poster on Home's "Continue reading" or "Jump back in" rail. */
+/** One poster on Home's Continue reading list. */
 export interface HomeReadingItem {
   seriesId: number
   seriesTitle: string
@@ -960,6 +956,7 @@ export interface HomeReadingItem {
   page: number
   /** Slice length. 0 on Kavita-imported rows, which is how the resume bar knows to hide. */
   pageCount: number
+  /** When anything in the series was last read, which is what orders the list. */
   lastReadAt: string
   unreadChapters: number
   /** The colour the cover lends to the card's bar and button, `#rrggbb`; null keeps the theme accent. */
@@ -967,19 +964,20 @@ export interface HomeReadingItem {
 }
 
 export interface HomeReadingResponse {
+  /** Most recently read first, whether part-way through a chapter (`page` > 0) or between two. */
   continueReading: HomeReadingItem[]
-  jumpBackIn: HomeReadingItem[]
 }
 
-/** A series that recently gained chapter files. */
+/** A series that recently gained chapter files it still has unread. */
 export interface HomeRecentSeriesItem {
   seriesId: number
   seriesTitle: string
   coverUrl: string | null
   addedAt: string
+  /** Unread files in the series' latest batch of downloads. */
   newChapterCount: number
   newestChapterLabel: string | null
-  /** Next unread downloaded chapter; null once everything downloaded has been read. */
+  /** Next unread downloaded chapter. The server drops fully read series, so null is only defensive. */
   readChapterId: number | null
 }
 
@@ -987,10 +985,10 @@ export interface HomeRecentSeriesItem {
 export const HOME_RAIL_LIMIT = 100
 
 /**
- * Home's two reading rails.
+ * Home's reading list.
  *
  * `refetchOnMount: 'always'` because reader position writes are fire-and-forget and invalidate
- * nothing; without it, coming back from `/read/:id` shows the resume page the rail was built with
+ * nothing; without it, coming back from `/read/:id` shows the resume page the list was built with
  * rather than where you actually stopped.
  */
 export function useHomeReading(limit = HOME_RAIL_LIMIT, enabled = true) {
@@ -1004,8 +1002,8 @@ export function useHomeReading(limit = HOME_RAIL_LIMIT, enabled = true) {
 }
 
 /**
- * Takes a series off both reading rails (or puts it back, for Undo). The server keeps it off until
- * the series is next read. Removal is applied to the cached rails straight away so the card leaves
+ * Takes a series off the reading list (or puts it back, for Undo). The server keeps it off until
+ * the series is next read. Removal is applied to the cached list straight away so the card leaves
  * on click rather than after a round trip.
  */
 export function useHideHomeReading() {
@@ -1017,10 +1015,7 @@ export function useHideHomeReading() {
       if (!hidden) return
       await queryClient.cancelQueries({ queryKey: ['home', 'reading'] })
       queryClient.setQueriesData<HomeReadingResponse>({ queryKey: ['home', 'reading'] }, (data) =>
-        data && {
-          continueReading: data.continueReading.filter((i) => i.seriesId !== seriesId),
-          jumpBackIn: data.jumpBackIn.filter((i) => i.seriesId !== seriesId),
-        },
+        data && { continueReading: data.continueReading.filter((i) => i.seriesId !== seriesId) },
       )
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['home', 'reading'] }),
@@ -1041,7 +1036,6 @@ export function useHomeRecentlyAdded(limit = HOME_RAIL_LIMIT, enabled = true) {
 /** Home section keys, in the order they ship. Mirrors `HomeSections.All` on the server exactly. */
 export const HOME_SECTIONS = [
   'continue',
-  'jumpback',
   'recent',
   'recommended',
   'fromanime',
@@ -1060,7 +1054,6 @@ export type HomeSectionKey = (typeof HOME_SECTIONS)[number]
 export const HOME_SECTION_LABELS: Record<HomeSectionKey, MessageDescriptor> = {
   continue: msg`Continue reading`,
   recent: msg`Recently added`,
-  jumpback: msg`Jump back in`,
   fromanime: msg`Continue from the anime`,
   following: msg`New from creators you follow`,
   recommended: msg`You might like`,
@@ -1068,22 +1061,20 @@ export const HOME_SECTION_LABELS: Record<HomeSectionKey, MessageDescriptor> = {
 }
 
 /** Sections that can lead with a hero, and whether they do by default. Mirrors the server. */
-export const HOME_HERO_DEFAULTS: Record<string, boolean> = { continue: true, jumpback: false }
+export const HOME_HERO_DEFAULTS: Record<string, boolean> = { continue: true }
 
 /**
  * The reading sections' own switches and their defaults. Mirrors `HomeHeroOptions` on the server.
- * `glance` is the last five weeks as a card in the Continue hero; `nextUpBeside` puts the rest of a
- * hero section in a list beside the hero instead of a tray of posters under it.
+ * `glance` is the last five weeks as a card in the Continue hero; `nextUpBeside` puts the rest of
+ * the section in a list beside the hero instead of a tray of posters under it.
  */
 export const HOME_SECTION_OPTIONS: Record<string, Record<string, boolean>> = {
   continue: { glance: true, nextUpBeside: false },
-  jumpback: { nextUpBeside: false },
 }
 
 /** Discover Browse tab section keys, in the order they ship. Mirrors `DiscoverSections.All`. */
 export const DISCOVER_SECTIONS = [
   'hero',
-  'taste',
   'recent',
   'following',
   'sideinterests',
@@ -1097,7 +1088,6 @@ export type DiscoverSectionKey = (typeof DISCOVER_SECTIONS)[number]
 
 export const DISCOVER_SECTION_LABELS: Record<DiscoverSectionKey, MessageDescriptor> = {
   hero: msg`Spotlight`,
-  taste: msg`Your taste`,
   recent: msg`Based on your recent activity`,
   following: msg`New from creators you follow`,
   sideinterests: msg`Side interests`,
@@ -1720,10 +1710,98 @@ export function useDeleteSeries() {
   })
 }
 
-export function useChapters(seriesId: number) {
+/** What an archive, restore or file removal changes: the lists, the one series, its chapters and the recycle bin. */
+function invalidateArchiveQueries(queryClient: ReturnType<typeof useQueryClient>, seriesIds: number[]) {
+  void queryClient.invalidateQueries({ queryKey: ['series'] })
+  void queryClient.invalidateQueries({ queryKey: ['recycle-bin'] })
+  void queryClient.invalidateQueries({ queryKey: ['archive-preview'] })
+  for (const id of seriesIds) {
+    void queryClient.invalidateQueries({ queryKey: ['series', id] })
+    void queryClient.invalidateQueries({ queryKey: ['chapters', id] })
+    void queryClient.invalidateQueries({ queryKey: ['series-files', id] })
+  }
+  for (const key of affectedKeys) void queryClient.invalidateQueries({ queryKey: [key] })
+}
+
+/** The archive and restore dialogs' figures. Fetched only while a dialog is open: the size stats every file. */
+export function useArchivePreview(id: number | null, enabled = true) {
+  return useQuery({
+    queryKey: ['archive-preview', id],
+    queryFn: () => api<ArchivePreview>(`/series/${id}/archive-preview`),
+    enabled: enabled && id !== null,
+    staleTime: 0,
+  })
+}
+
+export function useArchiveSeries() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, removeFiles, permanent = false }: { id: number } & ArchiveSeriesRequest) =>
+      api<ArchiveSeriesResponse>(`/series/${id}/archive`, {
+        method: 'POST',
+        body: JSON.stringify({ removeFiles, permanent }),
+      }),
+    onSuccess: (_, { id }) => invalidateArchiveQueries(queryClient, [id]),
+  })
+}
+
+export function useBulkArchiveSeries() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ seriesIds, removeFiles, permanent = false }: BulkArchiveSeriesRequest) =>
+      api<BulkArchiveSeriesResponse>('/series/archive/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ seriesIds, removeFiles, permanent }),
+      }),
+    onSuccess: (_, { seriesIds }) => invalidateArchiveQueries(queryClient, seriesIds),
+  })
+}
+
+export function useRestoreSeries() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, redownloadRemoved = false }: { id: number } & Partial<RestoreSeriesRequest>) =>
+      api<RestoreSeriesResponse>(`/series/${id}/restore`, {
+        method: 'POST',
+        body: JSON.stringify({ redownloadRemoved }),
+      }),
+    onSuccess: (_, { id }) => invalidateArchiveQueries(queryClient, [id]),
+  })
+}
+
+export function useDismissArchiveHint() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api<void>(`/series/${id}/archive-hint/dismiss`, { method: 'POST' }),
+    onSuccess: (_, id) => void queryClient.invalidateQueries({ queryKey: ['series', id] }),
+  })
+}
+
+export function useDismissRateHint() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api<void>(`/series/${id}/rate-hint/dismiss`, { method: 'POST' }),
+    onSuccess: (_, id) => void queryClient.invalidateQueries({ queryKey: ['series', id] }),
+  })
+}
+
+export function useRemoveArchivedFiles() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, permanent = false }: { id: number; permanent?: boolean }) =>
+      api<ArchiveSeriesResponse>(`/series/${id}/archive/removefiles`, {
+        method: 'POST',
+        body: JSON.stringify({ permanent }),
+      }),
+    onSuccess: (_, { id }) => invalidateArchiveQueries(queryClient, [id]),
+  })
+}
+
+export function useChapters(seriesId: number, enabled = true) {
   return useQuery({
     queryKey: ['chapters', seriesId],
     queryFn: () => api<ChapterDto[]>(`/chapter?seriesId=${seriesId}`),
+    enabled,
   })
 }
 
@@ -2016,6 +2094,21 @@ export function useSetChaptersWanted() {
   })
 }
 
+/** Keeps chapters flagged as delisted: clears the flag, which no sync sets again unless a source lists them anew. */
+export function useClearDelisted() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (chapterIds: number[]) =>
+      api<{ cleared: number }>('/chapter/delisted/clear', {
+        method: 'POST',
+        body: JSON.stringify({ chapterIds }),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['chapters'] })
+    },
+  })
+}
+
 /** Queues a hand-picked set of chapters, ignoring their wanted flag, see ChapterController. */
 export function useDownloadChapters() {
   const queryClient = useQueryClient()
@@ -2187,12 +2280,18 @@ export function useSeriesQueue(seriesId: number) {
   })
 }
 
-/** Per-status counts for the shell badge, so it doesn't poll a whole queue page. */
+/**
+ * Per-status counts for the shell badge, so it doesn't poll a whole queue page. Admins get item
+ * changes over the socket, which refetch this, so they poll slowly. Bulk removes (clear, remove
+ * failed, a single remove) send no event, so the slow poll still catches those.
+ */
 export function useQueueSummary() {
+  const pushed = useAuth().can('Admin')
+  const connected = useHubConnected()
   return useQuery({
     queryKey: ['queue-summary'],
     queryFn: () => api<QueueSummaryDto>('/queue/summary'),
-    refetchInterval: 10_000,
+    refetchInterval: !pushed ? 10_000 : connected ? 120_000 : 60_000,
   })
 }
 
@@ -2307,12 +2406,17 @@ export function useRemoveFailedQueue() {
   })
 }
 
-/** Pushed by `queuePauseChanged` (see `signalr.ts`), so the poll is only the fallback for a missed event. */
+/**
+ * Pushed by `queuePauseChanged` (see `signalr.ts`) to everyone who may pause, so they only poll
+ * while the socket is down; a reconnect refetches it.
+ */
 export function useQueuePause() {
+  const pushed = useAuth().can('ManageDownloadQueue')
+  const connected = useHubConnected()
   return useQuery({
     queryKey: ['queue-pause'],
     queryFn: ({ signal }) => api<QueuePauseDto>('/queue/pause', { signal }),
-    refetchInterval: 30_000,
+    refetchInterval: !pushed ? 30_000 : connected ? false : 60_000,
   })
 }
 
@@ -2399,6 +2503,10 @@ export function useSetMonitorMode() {
         method: 'POST',
         body: JSON.stringify({ mode }),
       }),
+    ...optimisticSeries<{ seriesId: number; mode: string }, SeriesDto>(queryClient, ({ mode }) => ({
+      monitorNewItems: mode,
+      monitored: mode !== 'None',
+    })),
     onSuccess: () => {
       // No ['chapters'] invalidation: a mode change governs chapters released later and leaves
       // every existing row alone, so there is nothing there to refetch.
@@ -2427,6 +2535,22 @@ export function useSetReadFileCleanup() {
   })
 }
 
+/** Pins how this series' files are converted: follow the rules, never, or a fixed quality. */
+export function useSetSeriesPageConversion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ seriesId, mode }: { seriesId: number; mode: string }) =>
+      api<{ pageConversion: string }>(`/series/${seriesId}/pageconversion`, {
+        method: 'POST',
+        body: JSON.stringify({ mode }),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['series'] })
+      void queryClient.invalidateQueries({ queryKey: ['page-conversion'], exact: true })
+    },
+  })
+}
+
 export interface ReadFileCleanupSettings {
   enabled: boolean
   days: number
@@ -2445,6 +2569,7 @@ export function useSaveReadFileCleanupSettings() {
   return useMutation({
     mutationFn: (body: ReadFileCleanupSettings) =>
       api<ReadFileCleanupSettings>('/settings/readcleanup', { method: 'PUT', body: JSON.stringify(body) }),
+    ...optimisticMerge(queryClient, ['settings', 'readcleanup'], (body: ReadFileCleanupSettings) => body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['settings', 'readcleanup'] })
       void queryClient.invalidateQueries({ queryKey: ['series'] })
@@ -2504,6 +2629,9 @@ export function useSetSeriesNotificationMode() {
         method: 'POST',
         body: JSON.stringify({ mode }),
       }),
+    ...optimisticSeries<{ seriesId: number; mode: string }, SeriesDto>(queryClient, ({ mode }) => ({
+      notificationMode: mode,
+    })),
     onSuccess: (_data, { seriesId }) => {
       void queryClient.invalidateQueries({ queryKey: ['series', seriesId] })
       void queryClient.invalidateQueries({ queryKey: ['series'] })
@@ -2548,15 +2676,21 @@ export function useBulkSetSeriesNotificationMode() {
 
 export interface SetRatingResult {
   rating: number | null
+  provisionalRating?: number | null
+  provisionalAtChapter?: number | null
+  /** Trackers to ask once whether "so far" scores should go to them too. "So far" writes only. */
+  soFarSyncAsk?: { service: string; label: string }[]
 }
 
 /**
  * Sets the user's 1–10 rating (null clears it). Returns immediately; the score push to connected
  * trackers runs in the background on the server (outcome lands in the scrobble log).
+ * `silent` is for a caller that words the failure itself.
  */
-export function useSetRating() {
+export function useSetRating({ silent = false }: { silent?: boolean } = {}) {
   const queryClient = useQueryClient()
   return useMutation({
+    meta: { silent },
     mutationFn: ({ seriesId, rating }: { seriesId: number; rating: number | null }) =>
       api<SetRatingResult>(`/series/${seriesId}/rating`, {
         method: 'PUT',
@@ -2570,6 +2704,153 @@ export function useSetRating() {
       for (const key of affectedKeys) void queryClient.invalidateQueries({ queryKey: [key] })
     },
   })
+}
+
+function useRatingMutation<V extends { seriesId: number }>(
+  mutationFn: (vars: V) => Promise<SetRatingResult>,
+  after?: (data: SetRatingResult, vars: V) => void,
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn,
+    onSuccess: (data, vars) => {
+      const { seriesId } = vars
+      after?.(data, vars)
+      void queryClient.invalidateQueries({ queryKey: ['series', seriesId] })
+      void queryClient.invalidateQueries({ queryKey: ['series'] })
+      void queryClient.invalidateQueries({ queryKey: ['rating-checkpoint', seriesId] })
+      void queryClient.invalidateQueries({ queryKey: ['rating-history', seriesId] })
+      for (const key of affectedKeys) void queryClient.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}
+
+export type RatingCheckpoint = 'hooked' | 'caughtUp' | 'volumeEnd'
+
+export interface RatingHistoryEntry {
+  rating: number
+  final: boolean
+  atChapter: number | null
+  origin: 'Manual' | 'Checkpoint' | 'Finish' | 'Import'
+  createdAt: string
+}
+
+/** The reader's score on a series over time, oldest first. */
+export function useRatingHistory(seriesId: number) {
+  return useQuery({
+    queryKey: ['rating-history', seriesId],
+    queryFn: () => api<RatingHistoryEntry[]>(`/series/${seriesId}/rating-history`),
+  })
+}
+
+export interface RatingCheckpointState {
+  checkpoint: RatingCheckpoint | null
+  provisionalRating: number | null
+}
+
+/**
+ * The "how is it so far?" prompt waiting on a series. The completing progress write arms it and may
+ * still be in flight when the reader's end screen opens, so an empty answer is asked again a few times.
+ * Keyed by chapter as well, so every chapter's end screen gets its own retries rather than sharing the
+ * first one's.
+ */
+export function useRatingCheckpoint(seriesId: number | undefined, chapterId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ['rating-checkpoint', seriesId, chapterId],
+    queryFn: () => api<RatingCheckpointState>(`/series/${seriesId}/rating-checkpoint`),
+    enabled: enabled && seriesId != null,
+    staleTime: 0,
+    refetchInterval: (query) =>
+      query.state.data?.checkpoint == null && query.state.dataUpdateCount < 4 ? 1500 : false,
+  })
+}
+
+export function useDismissRatingCheckpoint() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (seriesId: number) => api<void>(`/series/${seriesId}/rating-checkpoint/dismiss`, { method: 'POST' }),
+    onSuccess: (_, seriesId) => {
+      queryClient.setQueriesData<RatingCheckpointState>({ queryKey: ['rating-checkpoint', seriesId] }, (old) =>
+        old ? { ...old, checkpoint: null } : old,
+      )
+      void queryClient.invalidateQueries({ queryKey: ['series', seriesId] })
+    },
+  })
+}
+
+export interface RatingPromptsSettings {
+  enabled: boolean
+  /** Also ask at the end of each volume. Off unless chosen. */
+  volumes: boolean
+}
+
+export function useRatingPromptsSettings() {
+  return useQuery({
+    queryKey: ['settings', 'rating-prompts'],
+    queryFn: () => api<RatingPromptsSettings>('/settings/rating-prompts'),
+  })
+}
+
+export function useSaveRatingPromptsSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (settings: RatingPromptsSettings) =>
+      api<RatingPromptsSettings>('/settings/rating-prompts', { method: 'PUT', body: JSON.stringify(settings) }),
+    ...optimisticMerge(queryClient, ['settings', 'rating-prompts'], (settings: RatingPromptsSettings) => settings, { seededBySave: true }),
+    onSuccess: (saved) => queryClient.setQueryData(['settings', 'rating-prompts'], saved),
+  })
+}
+
+/** A "so far" score: never pushed to a tracker, and ignored by the server while a final rating exists. */
+export function useSetProvisionalRating() {
+  return useRatingMutation(
+    ({ seriesId, rating }: { seriesId: number; rating: number | null }) =>
+      api<SetRatingResult>(`/series/${seriesId}/rating/provisional`, {
+        method: 'PUT',
+        body: JSON.stringify({ rating }),
+      }),
+    (data, { seriesId }) => {
+      if (data.soFarSyncAsk?.length) askSoFarSync({ trackers: data.soFarSyncAsk, seriesId })
+    },
+  )
+}
+
+/** The answer to the one-time question, stored for each tracker it named. */
+export function useSetSoFarSync() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { services: string[]; enabled: boolean; seriesId?: number }) =>
+      api<{ services: string[]; enabled: boolean }>('/scrobble/sofar', { method: 'PUT', body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scrobble', 'status'] }),
+  })
+}
+
+/** Makes the "so far" score the rating, which pushes it to trackers like any other rating. */
+export function useFinalizeRating() {
+  return useRatingMutation(({ seriesId }: { seriesId: number }) =>
+    api<SetRatingResult>(`/series/${seriesId}/rating/finalize`, { method: 'POST' }),
+  )
+}
+
+/**
+ * The one way a star control rates a series. Part-read with no final rating sets a "so far" score;
+ * anything else sets the rating. Clearing clears whichever score is showing.
+ */
+export function useRateSeries() {
+  const final = useSetRating()
+  const provisional = useSetProvisionalRating()
+  return {
+    isPending: final.isPending || provisional.isPending,
+    rate: (
+      series: Pick<SeriesDto, 'id' | 'rating' | 'provisionalRating' | 'finished' | 'readChapterCount'>,
+      rating: number | null,
+      onSuccess?: (soFar: boolean) => void,
+    ) => {
+      const soFar = rating === null ? isProvisional(series) : ratesProvisionally(series)
+      const mutation = soFar ? provisional : final
+      mutation.mutate({ seriesId: series.id, rating }, { onSuccess: () => onSuccess?.(soFar) })
+    },
+  }
 }
 
 export function useTags() {
@@ -2751,6 +3032,16 @@ export function useSaveOpdsSettings() {
     // `password` is only needed when the save mints the token (first enable); the server decides.
     mutationFn: (settings: { enabled: boolean; trackProgress: boolean; komga?: boolean; password?: string }) =>
       api<OpdsSettings>('/settings/opds', { method: 'PUT', body: JSON.stringify(settings) }),
+    ...optimisticMerge(
+      queryClient,
+      ['settings', 'opds'],
+      ({ enabled, trackProgress, komga }: { enabled: boolean; trackProgress: boolean; komga?: boolean }) => ({
+        enabled,
+        trackProgress,
+        ...(komga !== undefined && { komga }),
+      }),
+      { seededBySave: true },
+    ),
     onSuccess: (data) => {
       // The PUT mints the token on first enable, so seed the cache from the response rather
       // than refetching, otherwise the URL box stays empty until the round-trip lands.
@@ -2788,9 +3079,41 @@ export function useSaveUpdateSettings() {
         method: 'PUT',
         body: JSON.stringify({ checkForUpdates }),
       }),
+    ...optimisticMerge(queryClient, ['settings', 'updates'], (checkForUpdates: boolean) => ({ checkForUpdates })),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['settings', 'updates'] })
     },
+  })
+}
+
+export function useHostInfo(enabled = true) {
+  return useQuery({
+    queryKey: ['system', 'host'],
+    queryFn: () => api<HostInfoDto>('/system/host'),
+    enabled,
+  })
+}
+
+export function useSetNetworkAccess() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (allowNetwork: boolean) =>
+      api<HostInfoDto>('/system/host/network', { method: 'PUT', body: JSON.stringify({ allowNetwork }) }),
+    onSuccess: (data) => queryClient.setQueryData(['system', 'host'], data),
+  })
+}
+
+/** Stops Maki so whatever supervises it starts it again. The page loses its connection meanwhile. */
+export function useRestartMaki() {
+  return useMutation({
+    mutationFn: () => api<void>('/system/restart', { method: 'POST' }),
+  })
+}
+
+/** Desktop build: restarts into the update the tray app has downloaded. */
+export function useApplyUpdate() {
+  return useMutation({
+    mutationFn: () => api<void>('/system/update/apply', { method: 'POST' }),
   })
 }
 
@@ -2818,9 +3141,11 @@ export interface SourceInfo {
   displayName: string
   baseUrl: string
   /** Set for a source that is not built in. A Suwayomi source's `baseUrl` is the Suwayomi server, not the site. */
-  provider?: 'suwayomi' | null
+  provider?: 'suwayomi' | 'custom' | null
   /** Set for a Suwayomi source. */
   suwayomi?: SuwayomiSourceState | null
+  /** Set for a custom source an admin defined. */
+  custom?: CustomSourceState | null
   needsFlareSolverr: boolean
   /**
    * Whether this source honours a mapping's `languageFilter`, so the mappings card offers a
@@ -2842,6 +3167,32 @@ export interface SourceInfo {
   defaultRank?: number
   /** How this source's copies measure in general; null when nothing has measured it. */
   quality?: SourceQualitySummary | null
+}
+
+export interface CustomSourceState {
+  /** The definition's id, the part of `name` after `custom-`. */
+  id: string
+  /** False for a site with neither search nor a catalogue page: series are linked by URL only. */
+  hasSearch: boolean
+  /** The stored definition can't be used by this build; `problem` says why. */
+  invalid: boolean
+  problem: string | null
+  /** The health job's last check failed, or the definition is invalid. Older servers leave it out. */
+  failing?: boolean
+  /** The repository it was installed from, or null for a hand-made one. */
+  origin?: {
+    /** Admins only: a private repository's URL can carry a token. */
+    repository: string | null
+    repositoryName: string | null
+    version: number
+    /** A newer version waits, and the source isn't detached. */
+    updateAvailable: boolean
+    latestVersion: number | null
+  } | null
+  /** Edited here after it was installed, so the repository's updates no longer apply. */
+  detached?: boolean
+  /** An update replaced an earlier version that can be put back. */
+  canRevert?: boolean
 }
 
 export interface SuwayomiSourceState {
@@ -2963,9 +3314,12 @@ export function useCreateMapping() {
       url: string
       priority?: number
     }) => api<SourceMappingDto>('/sourcemapping', { method: 'POST', body: JSON.stringify(mapping) }),
+    // The server lists the new source's chapters before it answers.
     onSuccess: (_d, v) => {
       void queryClient.invalidateQueries({ queryKey: ['sourcemappings', v.seriesId] })
       void queryClient.invalidateQueries({ queryKey: ['source-order', v.seriesId] })
+      void queryClient.invalidateQueries({ queryKey: ['chapters', v.seriesId] })
+      void queryClient.invalidateQueries({ queryKey: ['series', v.seriesId] })
     },
   })
 }
@@ -3363,6 +3717,8 @@ export interface DumpProgress {
   downloadedBytes: number
   /** Null when the server withheld Content-Length, which leaves bytes but no percentage. */
   totalBytes: number | null
+  /** Share of the index build done, 0 to 1; null outside the 'indexing' phase. */
+  indexProgress: number | null
   bytesPerSecond: number | null
   estimatedSecondsRemaining: number | null
   startedAt: string | null
@@ -3409,6 +3765,7 @@ export function useSaveMonitoringSettings() {
         method: 'PUT',
         body: JSON.stringify(patch),
       }),
+    ...optimisticMerge(queryClient, ['settings', 'monitoring'], (patch: Partial<MonitoringSettings>) => patch),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['settings', 'monitoring'] })
     },
@@ -3456,6 +3813,9 @@ export function useSaveDiscoverSettings() {
         method: 'PUT',
         body: JSON.stringify({ maxContentRating }),
       }),
+    ...optimisticMerge(queryClient, ['settings', 'discover'], (maxContentRating: ContentRating) => ({
+      maxContentRating,
+    })),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['settings', 'discover'] })
     },
@@ -3560,6 +3920,7 @@ export function useSaveNameParsingSettings() {
         method: 'PUT',
         body: JSON.stringify({ languages }),
       }),
+    ...optimisticMerge(queryClient, ['settings', 'nameparsing'], (languages: string[]) => ({ languages }), { seededBySave: true }),
     onSuccess: (saved) => queryClient.setQueryData(['settings', 'nameparsing'], saved),
   })
 }
@@ -3712,7 +4073,13 @@ export interface DownloadSettings {
   adaptiveRefresh: boolean
   /** Look for a volume release before a new series downloads anything from its sources. */
   volumeFirst: boolean
+  /** When Maki removes an imported torrent from the download client. */
+  removeCompleted: TorrentRemovalMode
+  /** Delete the downloaded files with the torrent, where the library is known to hold its own copy. */
+  removeData: boolean
 }
+
+export type TorrentRemovalMode = 'never' | 'afterimport'
 
 /** `manual` follows each mapping's priority; `quality` ranks sources by the series' upgrade profile. */
 export type SourceOrderMode = 'manual' | 'quality'
@@ -3743,6 +4110,8 @@ export function useSourcePriority(enabled = true) {
     queryKey: ['settings', 'sources', 'priority'],
     queryFn: () => api<SourcePrioritySettings>('/settings/sources/priority'),
     enabled,
+    // Changes only through its own save, which writes the cache.
+    staleTime: 5 * 60 * 1000,
   })
 }
 
@@ -3879,6 +4248,9 @@ export function useRootFolders() {
     queryKey: ['rootfolders'],
     queryFn: () => api<RootFolder[]>('/rootfolder'),
     enabled: can('AddSeries'),
+    // Mounted by some twenty components, often several per page. Edits invalidate it; only the
+    // free space and the reachable flag move on their own, and a couple of minutes is fine for those.
+    staleTime: 2 * 60 * 1000,
   })
 }
 
@@ -3890,6 +4262,26 @@ export function useAddRootFolder() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['rootfolders'] })
     },
+  })
+}
+
+/** One level of the server's filesystem for the folder picker. An empty `path` is the drive list (Windows). */
+export interface FolderListing {
+  path: string
+  parent: string | null
+  folders: { name: string; path: string }[]
+}
+
+/** The picker shows its own failure inline, so the toast stays out of it. */
+export function useBrowseFolders(path: string | null) {
+  return useQuery({
+    queryKey: ['rootfolders', 'browse', path],
+    queryFn: () =>
+      api<FolderListing>(`/rootfolder/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+    enabled: path !== null,
+    placeholderData: keepPreviousData,
+    staleTime: 0,
+    meta: { silent: true },
   })
 }
 
@@ -3916,6 +4308,8 @@ export interface ScrobbleConnection {
   syncReading: boolean
   /** Per-tracker: push ratings to this service. */
   syncRatings: boolean
+  /** Per-tracker: push "so far" scores too, on top of `syncRatings`. Absent on older responses. */
+  syncSoFar?: boolean
   /** Whether this tracker can hand over an anime list at all, which is what draws the switch. */
   animeList: boolean
   /** Per-tracker: let this service's watched anime steer recommendations. */
@@ -4064,16 +4458,19 @@ export function useScrobblePreferences() {
       reading,
       ratings,
       anime,
+      soFar,
     }: {
       service: string
       reading: boolean
       ratings: boolean
       /** Omitted for trackers with no anime list, so the server leaves that setting alone. */
       anime?: boolean
+      /** Omitted unless this switch changed: an unset value is also what "not asked yet" means. */
+      soFar?: boolean
     }) =>
-      api<{ service: string; reading: boolean; ratings: boolean; anime: boolean | null }>(
+      api<{ service: string; reading: boolean; ratings: boolean; anime: boolean | null; soFar: boolean | null }>(
         `/scrobble/preferences/${service}`,
-        { method: 'PUT', body: JSON.stringify({ reading, ratings, anime }) },
+        { method: 'PUT', body: JSON.stringify({ reading, ratings, anime, soFar }) },
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scrobble', 'status'] }),
   })
@@ -4385,6 +4782,7 @@ export function useSaveBackupSettings() {
         method: 'PUT',
         body: JSON.stringify(value),
       }),
+    ...optimisticMerge(queryClient, ['settings', 'backup'], (value: BackupRetentionSettings) => value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings', 'backup'] }),
   })
 }

@@ -82,8 +82,9 @@ export function UpcomingContent({ items, now }: { items: UpcomingSeriesDto[]; no
     return (
       <EmptyState
         compact
+        framed
         mood="asleep"
-        title={t`Nothing to place yet`}
+        title={t`No release estimates yet`}
         description={t`A series shows up here once its chapters come out on a steady enough rhythm, or when its source announces the next one.`}
       />
     )
@@ -94,10 +95,8 @@ export function UpcomingContent({ items, now }: { items: UpcomingSeriesDto[]; no
       <Stack gap="xs">
         <Text size="sm" c="var(--ink-3)" maw="80ch">
           <Trans>
-            Each bar spans the days a chapter is likely, worked out from the series' own release
-            history, so it is a span and never a promise. The percentage is how often its recent
-            chapters came out inside the span drawn for them. A diamond marks a day the source
-            itself announced.
+            Each bar spans the days a chapter is likely, never a promise. A diamond marks a day the
+            source announced.
           </Trans>
         </Text>
         <UpcomingLegend />
@@ -270,7 +269,7 @@ function UpcomingLine({ item, late = false }: { item: UpcomingSeriesDto; late?: 
         )}
         {range && (
           <Text size="sm" c={late ? 'var(--warn)' : undefined}>
-            {late ? <Trans>Running late. It was likely {range}.</Trans> : <Trans>Likely {range}</Trans>}
+            {late ? <Trans>Later than expected. We guessed {range}.</Trans> : <Trans>Likely {range}</Trans>}
           </Text>
         )}
         {range && (

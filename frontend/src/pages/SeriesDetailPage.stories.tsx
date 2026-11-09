@@ -1,8 +1,21 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, waitFor, within } from 'storybook/test'
 import { http, HttpResponse } from 'msw'
-import { api, failWith, neverResolve } from '../../.storybook/mocks/api'
-import { animeResume, providerDetail, seriesDto, seriesMsw, torrentProposal } from '../../.storybook/mocks/series'
+import { api, failWith, hoursAgo, neverResolve } from '../../.storybook/mocks/api'
+import {
+  animeResume,
+  archivePreview,
+  archivedSeriesDto,
+  hintedSeriesDto,
+  providerDetail,
+  seriesConversionRestorable,
+  seriesDto,
+  chaptersFor,
+  scenarios,
+  seriesMsw,
+  torrentProposal,
+} from '../../.storybook/mocks/series'
+import { noteCounts, readerNotes } from '../../.storybook/mocks/notes'
 import SeriesDetailPage from './SeriesDetailPage'
 import { monoText } from '../../.storybook/monoText'
 
@@ -30,6 +43,127 @@ export const Completed: Story = {
   parameters: at(2),
   play: async ({ canvas }) => {
     await expect(await canvas.findByRole('heading', { name: /The Ninth Kitchen/ })).toBeVisible()
+    await expect(canvas.queryByText(/You've finished this/)).toBeNull()
+  },
+}
+
+/** Completed and finished by every reader: a quiet line offers the archive and opens the same dialog as the menu. */
+export const FinishedArchiveHint: Story = {
+  parameters: { ...at(2), msw: seriesMsw(http.get(api('/series/:id'), () => HttpResponse.json(hintedSeriesDto(2)))) },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await expect(await canvas.findByText("You've finished this. Archive it?")).toBeVisible()
+    await userEvent.click(await canvas.findByRole('button', { name: 'Archive' }))
+    const dialog = await within(canvasElement.ownerDocument.body).findByRole('dialog')
+    await expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeVisible()
+  },
+}
+
+let rated: number | null = null
+
+/** Finished but unrated: the rate hint comes first, and rating from it hands the line over to the archive offer. */
+export const FinishedRateHint: Story = {
+  beforeEach: () => {
+    rated = null
+  },
+  parameters: {
+    ...at(2),
+    msw: seriesMsw(
+      http.get(api('/series/:id'), () =>
+        HttpResponse.json({ ...hintedSeriesDto(2), rating: rated, rateHintEligible: rated == null }),
+      ),
+      http.put(api('/series/:id/rating'), async ({ request }) => {
+        rated = ((await request.json()) as { rating: number | null }).rating
+        return HttpResponse.json({ rating: rated })
+      }),
+    ),
+  },
+  play: async ({ canvas, userEvent }) => {
+    await expect(await canvas.findByText("You've finished this. How was it?")).toBeVisible()
+    await expect(canvas.queryByText("You've finished this. Archive it?")).toBeNull()
+    const stars = canvas.getByRole('group', { name: 'Rate this series' })
+    // Mantine commits a rating from the star's label; the radio itself only previews it.
+    await userEvent.click((within(stars).getByRole('radio', { name: '4' }) as HTMLInputElement).labels![0])
+    await waitFor(() => expect(rated).toBe(8))
+    await expect(await canvas.findByText("You've finished this. Archive it?")).toBeVisible()
+  },
+}
+
+let hintDismissed = false
+
+/** Dismissing posts once and the line goes away on the refetch. */
+export const FinishedArchiveHintDismissed: Story = {
+  beforeEach: () => {
+    hintDismissed = false
+  },
+  parameters: {
+    ...at(2),
+    msw: seriesMsw(
+      http.get(api('/series/:id'), () => HttpResponse.json({ ...hintedSeriesDto(2), archiveHintEligible: !hintDismissed })),
+      http.post(api('/series/:id/archive-hint/dismiss'), () => {
+        hintDismissed = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+    ),
+  },
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(canvas.queryByText(/You've finished this/)).toBeNull())
+    await expect(hintDismissed).toBe(true)
+  },
+}
+
+export const Archived: Story = {
+  parameters: { msw: seriesMsw(http.get(api('/series/:id'), () => HttpResponse.json(archivedSeriesDto(1)))) },
+  play: async ({ canvas, userEvent }) => {
+    await expect(await canvas.findByRole('heading', { name: /Lanterns Over Kasumi/ })).toBeVisible()
+    await expect(await canvas.findByText(/Archived on .*\. Maki is not checking sources for this series\./)).toBeVisible()
+    await expect(await canvas.findByRole('button', { name: 'Restore to library' })).toBeVisible()
+    await expect(await canvas.findByRole('button', { name: 'Remove files' })).toBeVisible()
+    const download = await canvas.findByRole('button', { name: /^Download .* wanted$/ })
+    await waitFor(() => expect(download).toHaveAttribute('aria-disabled', 'true'))
+    await userEvent.click(download)
+    await expect(canvas.queryByRole('dialog')).toBeNull()
+    const releases = await canvas.findByRole('button', { name: 'Search releases' })
+    await waitFor(() => expect(releases).toHaveAttribute('aria-disabled', 'true'))
+    await userEvent.click(releases)
+    await expect(canvas.queryByRole('dialog')).toBeNull()
+  },
+}
+
+export const ArchivedRestoreAsksAboutFiles: Story = {
+  parameters: {
+    msw: seriesMsw(
+      http.get(api('/series/:id'), () =>
+        HttpResponse.json({ ...archivedSeriesDto(1), chapterFileCount: 0, removedChapterCount: 142 }),
+      ),
+      archivePreview({ redownloadableChapters: 142 }),
+    ),
+  },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await userEvent.click(await canvas.findByRole('button', { name: 'Restore to library' }))
+    const dialog = await within(canvasElement.ownerDocument.body).findByRole('dialog')
+    await expect(await within(dialog).findByText('Download the 142 removed chapters again?')).toBeVisible()
+  },
+}
+
+/** The restore went through but the download could not be queued: the toast says why. */
+export const ArchivedRestoreQueueError: Story = {
+  parameters: {
+    msw: seriesMsw(
+      http.get(api('/series/:id'), () =>
+        HttpResponse.json({ ...archivedSeriesDto(1), chapterFileCount: 0, removedChapterCount: 142 }),
+      ),
+      archivePreview({ redownloadableChapters: 142 }),
+      http.post(api('/series/:id/restore'), () => HttpResponse.json({ queued: 0, queueError: 'Downloads are paused' })),
+    ),
+  },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await userEvent.click(await canvas.findByRole('button', { name: 'Restore to library' }))
+    const dialog = await within(canvasElement.ownerDocument.body).findByRole('dialog')
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Restore and download' }))
+    await expect(
+      await within(canvasElement.ownerDocument.body).findByText(/the removed chapters were not queued: Downloads are paused/),
+    ).toBeVisible()
   },
 }
 
@@ -45,7 +179,7 @@ export const ManyUnreadChapters: Story = {
   parameters: at(3, '?tab=chapters'),
   play: async ({ canvas }) => {
     await expect(await canvas.findByRole('heading', { name: 'Chapters' })).toBeVisible()
-    await waitFor(() => expect(canvas.getAllByText(/Ch\.\d+/).length).toBeGreaterThan(5))
+    await waitFor(() => expect(canvas.getAllByText(/Ch\. \d+/).length).toBeGreaterThan(5))
   },
 }
 
@@ -61,16 +195,120 @@ export const ChaptersTab: Story = {
 export const ChapterFilterMissing: Story = {
   parameters: at(1, '?tab=chapters'),
   play: async ({ canvas, userEvent }) => {
-    await userEvent.click(await canvas.findByRole('radio', { name: /^Missing/ }))
-    await expect(await canvas.findByText(/Ch\.17\b/)).toBeVisible()
+    await userEvent.click(await canvas.findByRole('radio', { name: /^Not downloaded/ }))
+    await expect(await canvas.findByText(/Ch\. 17\b/)).toBeVisible()
   },
+}
+
+const filesGone = seriesMsw(
+  http.get(api('/chapter'), () =>
+    HttpResponse.json(chaptersFor(1, { ...scenarios[1].shape, fileMissing: Array.from({ length: 40 }, (_, i) => i + 1) })),
+  ),
+)
+
+export const ChapterFilesMissing: Story = {
+  parameters: { msw: filesGone, ...at(1, '?tab=chapters') },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await expect(await canvas.findByText(/chapters have no file on disk/)).toBeVisible()
+    await userEvent.click(await canvas.findByRole('radio', { name: /^File missing/ }))
+    await waitFor(() => expect(canvas.getAllByText('File missing').length).toBeGreaterThan(5))
+    await userEvent.click(canvas.getAllByRole('button', { name: 'Relink files' })[0])
+    await expect(await body(canvasElement).findByRole('dialog')).toBeVisible()
+  },
+}
+
+export const ChapterFilesMissingPhone: Story = {
+  globals: { viewport: { value: 'mobile1', isRotated: false } },
+  parameters: { viewport: { defaultViewport: 'mobile1' }, msw: filesGone, ...at(1, '?tab=chapters') },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByText(/chapters have no file on disk/)).toBeVisible()
+  },
+}
+
+type PlayContext = Parameters<NonNullable<Story['play']>>[0]
+
+const selectThreeChapters = async ({ canvas, userEvent }: PlayContext) => {
+  await userEvent.click(await canvas.findByRole('button', { name: 'Select' }))
+  const rows = await canvas.findAllByRole('row', { selected: false })
+  for (const row of rows.slice(0, 3)) await userEvent.click(row)
+  await expect(await canvas.findByText('3 selected')).toBeVisible()
 }
 
 export const SelectModeBulkBar: Story = {
   parameters: at(1, '?tab=chapters'),
-  play: async ({ canvas, userEvent }) => {
+  play: async (ctx) => {
+    await selectThreeChapters(ctx)
+    await waitFor(() => expect(ctx.canvas.getByRole('button', { name: 'Download' })).toBeEnabled())
+    await waitFor(() => expect(ctx.canvas.getByRole('button', { name: 'More' })).toBeEnabled())
+    await expect(ctx.canvas.queryByRole('button', { name: 'Unlink' })).toBeNull()
+  },
+}
+
+export const SelectModeMoreMenu: Story = {
+  parameters: at(1, '?tab=chapters'),
+  play: async (ctx) => {
+    await selectThreeChapters(ctx)
+    await ctx.userEvent.click(ctx.canvas.getByRole('button', { name: 'More' }))
+    const page = body(ctx.canvasElement)
+    await expect(await page.findByRole('menuitem', { name: "Don't want" })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Link to file' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Unlink' })).toBeVisible()
+  },
+}
+
+export const SelectModeDeleteMenu: Story = {
+  parameters: at(1, '?tab=chapters'),
+  play: async (ctx) => {
+    await selectThreeChapters(ctx)
+    await ctx.userEvent.click(ctx.canvas.getByRole('button', { name: 'Delete' }))
+    const page = body(ctx.canvasElement)
+    await expect(await page.findByRole('menuitem', { name: 'Delete files' })).toBeVisible()
+    await ctx.userEvent.click(page.getByRole('menuitem', { name: 'Remove chapters' }))
+    await expect(await page.findByRole('dialog', { name: 'Remove chapters?' })).toBeVisible()
+  },
+}
+
+export const SelectModePhone: Story = {
+  globals: { viewport: { value: 'mobile1', isRotated: false } },
+  parameters: { viewport: { defaultViewport: 'mobile1' }, ...at(1, '?tab=chapters') },
+  play: async (ctx) => {
+    await selectThreeChapters(ctx)
+    await ctx.userEvent.click(ctx.canvas.getByRole('button', { name: 'Actions' }))
+    await expect(await body(ctx.canvasElement).findByRole('menuitem', { name: 'Download' })).toBeVisible()
+  },
+}
+
+const withNoteCounts = seriesMsw(
+  http.get(api('/series/:id/notes/counts'), () => HttpResponse.json(noteCounts)),
+  http.get(api('/chapters/:id/notes'), () => HttpResponse.json(readerNotes)),
+)
+
+export const ChapterNotes: Story = {
+  parameters: { ...at(1, '?tab=chapters'), msw: withNoteCounts },
+  play: async ({ canvas, userEvent, canvasElement }) => {
+    const name = /^Notes on .*Ch\. 2: 1 yours, 2 shared$/
+    // Hovering mounts the tooltip, which replaces the button; click the one that stays.
+    await userEvent.hover(await canvas.findByRole('button', { name }))
+    await userEvent.click(await canvas.findByRole('button', { name }))
+    const body = within(canvasElement.ownerDocument.body)
+    // Named after the count that opened it.
+    await expect(await body.findByRole('dialog', { name })).toBeVisible()
+    // Chapter 2 is read, so other people's shared notes show without folding.
+    await expect(await body.findByText(/Best fight so far/)).toBeVisible()
+    await expect(body.queryByText('Tap to show')).toBeNull()
+  },
+}
+
+export const RemoveChaptersWarnsAboutNotes: Story = {
+  parameters: { ...at(1, '?tab=chapters'), msw: withNoteCounts },
+  play: async ({ canvas, userEvent, canvasElement }) => {
     await userEvent.click(await canvas.findByRole('button', { name: 'Select' }))
-    await expect(await canvas.findByText(/selected/i)).toBeVisible()
+    const row = (await canvas.findByRole('button', { name: /^Notes on .*Ch\. 3: 0 yours, 1 shared$/ })).closest('tr')!
+    await userEvent.click(within(row).getAllByText(/Ch\.\s?3$/)[0])
+    await userEvent.click(await canvas.findByRole('button', { name: 'Delete' }))
+    const body = within(canvasElement.ownerDocument.body)
+    await userEvent.click(await body.findByRole('menuitem', { name: 'Remove chapters' }))
+    await expect(await body.findByText('1 note on the selected chapters will be deleted.')).toBeVisible()
   },
 }
 
@@ -148,6 +386,42 @@ export const NumberingClash: Story = {
       http.get(api('/series/:id'), () => HttpResponse.json(seriesDto(6, { numberingClash: 'comick|asurascans' }))),
     ),
     ...at(6),
+  },
+}
+
+export const DelistedChapters: Story = {
+  parameters: {
+    msw: seriesMsw(
+      http.get(api('/chapter'), () =>
+        HttpResponse.json(
+          chaptersFor(6).map((c, i, all) => (i >= all.length - 2 ? { ...c, hasFile: true, delistedAt: hoursAgo(20) } : c)),
+        ),
+      ),
+    ),
+    ...at(6),
+  },
+  play: async ({ canvas, userEvent }) => {
+    await expect(await canvas.findByText('2 downloaded chapters are no longer listed')).toBeVisible()
+    await userEvent.click(canvas.getByRole('button', { name: 'Show them' }))
+    await waitFor(() => expect(canvas.getAllByText('Delisted')).toHaveLength(2))
+  },
+}
+
+export const DelistedChaptersKept: Story = {
+  parameters: {
+    msw: seriesMsw(
+      http.get(api('/chapter'), () =>
+        HttpResponse.json(
+          chaptersFor(6).map((c, i, all) => (i >= all.length - 2 ? { ...c, hasFile: true, delistedAt: hoursAgo(20) } : c)),
+        ),
+      ),
+      http.post(api('/chapter/delisted/clear'), () => HttpResponse.json({ cleared: 2 })),
+    ),
+    ...at(6),
+  },
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole('button', { name: 'Keep them' }))
+    await waitFor(() => expect(document.body).toHaveTextContent('Kept 2 chapters'))
   },
 }
 
@@ -253,6 +527,7 @@ export const EditMetadataDialog: Story = {
 export const MoveSeriesDialog: Story = {
   play: async ({ canvas, canvasElement, userEvent }) => {
     await userEvent.click(await canvas.findByRole('button', { name: 'More actions' }))
+    await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Files' }))
     await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Move to another root folder' }))
     await expect(await body(canvasElement).findByRole('dialog', { name: 'Move series' })).toBeVisible()
   },
@@ -261,8 +536,34 @@ export const MoveSeriesDialog: Story = {
 export const RenameFilesDialog: Story = {
   play: async ({ canvas, canvasElement, userEvent }) => {
     await userEvent.click(await canvas.findByRole('button', { name: 'More actions' }))
+    await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Files' }))
     await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Rename files' }))
     await expect(await body(canvasElement).findByRole('dialog', { name: 'Rename files' })).toBeVisible()
+  },
+}
+
+export const UndoConversionDialog: Story = {
+  parameters: {
+    msw: seriesMsw(http.get(api('/series/:id/pageconversion/history'), () => HttpResponse.json(seriesConversionRestorable))),
+  },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await canvas.findByRole('heading', { name: /Lanterns Over Kasumi/ })
+    await userEvent.click(await canvas.findByRole('button', { name: 'More actions' }))
+    await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Files' }))
+    await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Undo conversion...' }))
+    const dialog = await body(canvasElement).findByRole('dialog', { name: 'Undo conversion' })
+    await expect(await within(dialog).findByText(/48 files have their original in the trash/)).toBeVisible()
+  },
+}
+
+export const UndoConversionAbsentWithoutRestorableFiles: Story = {
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await canvas.findByRole('heading', { name: /Lanterns Over Kasumi/ })
+    await userEvent.click(await canvas.findByRole('button', { name: 'More actions' }))
+    await userEvent.click(await body(canvasElement).findByRole('menuitem', { name: 'Files' }))
+    const menu = await body(canvasElement).findByRole('menu')
+    await expect(await within(menu).findByRole('menuitem', { name: /Page conversion/ })).toBeVisible()
+    await expect(within(menu).queryByRole('menuitem', { name: /Undo conversion/ })).toBeNull()
   },
 }
 

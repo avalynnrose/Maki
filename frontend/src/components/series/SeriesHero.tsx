@@ -1,7 +1,6 @@
 import {type ReactNode, useMemo} from 'react'
 import {
     ActionIcon,
-    Alert,
     Box,
     Divider,
     Group,
@@ -12,21 +11,21 @@ import {
     Stack,
     Text,
     Title,
-    Tooltip
+    Tooltip,
+    VisuallyHidden,
 } from '@mantine/core'
-import {IconAlertTriangle, IconArrowLeft, IconBook, IconDownload, IconX} from '@tabler/icons-react'
+import { IconAlertTriangle, IconArrowLeft, IconBook, IconCheck, IconDownload, IconX } from '../../lib/icons'
 import { Link } from 'react-router-dom'
 import { otherTitles, readableTitles } from '../../api/titles'
 import type { SeriesDto } from '../../api/types'
-import {
-    contentRatingToken,
-    contentRatingVisual,
-    seriesProgressVisual,
-    seriesStatusVisual,
-    statusToken,
-} from '../ui/status'
+import { seriesProgressVisual, seriesStatusVisual, statusToken } from '../ui/status'
+import { ContentRatingChip } from '../ContentRatingChip'
+import { ChapterCountsInfo } from './ChapterCountsInfo'
 import { useReadTracking } from '../../api/reader'
 import { useChapters } from '../../api/hooks'
+import { formatDecimal } from '../../format'
+import { isProvisional, shownRating } from '../../lib/rating'
+import { RatingHistoryButton } from './RatingHistoryButton'
 import { msg } from '@lingui/core/macro'
 import { Plural, Trans, useLingui } from '@lingui/react/macro'
 import { useLabel } from '../../i18n-context'
@@ -35,6 +34,7 @@ import { useCoverTint } from '../../lib/coverTint'
 import {HeroBackdrop} from './HeroBackdrop'
 import { MetadataLock } from './EditMetadataModal'
 import { GENRE_LABELS, TYPE_LABELS } from '../CatalogueFilters'
+import { MetaList } from '../ui/MetaList'
 
 /** Where the back link points for a series nobody navigated to: a bookmark, or a pasted link. */
 const LIBRARY_FALLBACK = { to: '/library', label: msg`Library` }
@@ -57,20 +57,30 @@ const MAX_HERO_ALT_TITLES = 4
 export function SeriesHero({
                                series,
                                onRate,
+                               onFinalize,
                                actions,
                                tabs,
+                               readUpTo = null,
+                               nextChapter = null,
                            }: {
     series: SeriesDto
     onRate: (value: number | null) => void
+    /** Makes a "so far" score the rating. */
+    onFinalize: () => void
     actions: ReactNode
     tabs: ReactNode
+    /** Highest chapter number read, for the counts popover. */
+    readUpTo?: number | null
+    /** Label of the chapter the Read button opens. */
+    nextChapter?: string | null
 }) {
     const { t, i18n } = useLingui()
     const readTracking = useReadTracking()
     const status = seriesStatusVisual(series.status)
-    const contentRating = contentRatingVisual(series.contentRating)
-    const ratingToken = contentRatingToken(series.contentRating)
     const author = series.authorStory ?? series.authorArt
+    const rating = shownRating(series)
+    const soFar = isProvisional(series)
+    const soFarChapter = series.provisionalAtChapter != null ? formatDecimal(series.provisionalAtChapter) : null
     const { data: chapters } = useChapters(series.id)
     // Wherever you came from, not a fixed destination: reached from Discover with a panel full of
     // filters, this walks back to that panel with the filters still on it. The library is only the
@@ -105,12 +115,26 @@ export function SeriesHero({
         return { highest, total, missing }
     }, [series, chapters])
 
+    const numbering = useMemo(() => {
+        const numbered = (chapters ?? []).map((c) => c.number).filter((n): n is number => n !== null)
+        return {
+            highest: numbered.length > 0 ? Math.max(...numbered) : null,
+            offNumbering: (chapters ?? []).filter((c) => c.number === null || !Number.isInteger(c.number)).length,
+        }
+    }, [chapters])
+
     // Wanted chapters with no file yet, queued or not; the page's download button excludes the queued ones.
     const missingWanted = useMemo(
         () => (chapters ?? []).filter((c) => c.wanted && !c.hasFile && !c.fileRemovedAt).length,
         [chapters],
     )
 
+    // The total also counts chapters that have (or had) a file with Wanted off, so it only says
+    // "wanted" when every one of them has the switch on, or it disagrees with the Wanted filter.
+    const wantedSwitches = useMemo(() => (chapters ?? []).filter((c) => c.wanted).length, [chapters])
+
+    // The server counts a file the health scan found missing as obtained; the Chapters tab does not.
+    const fileMissing = useMemo(() => (chapters ?? []).filter((c) => c.fileMissing).length, [chapters])
     const progress = useMemo(
         () =>
             seriesProgressVisual(
@@ -119,17 +143,42 @@ export function SeriesHero({
             ),
         [series, readTracking],
     )
+    // Downloads alone leaves those chapters out; reading progress still counts them.
+    const downloads = useMemo(
+        () =>
+            fileMissing === 0
+                ? progress
+                : seriesProgressVisual(
+                      { ...series, chapterFileCount: Math.max(0, series.chapterFileCount - fileMissing) },
+                      readTracking,
+                  ),
+        [progress, series, readTracking, fileMissing],
+    )
 
     // Hoisted out of the JSX below: Lingui names a placeholder after the expression only when that
     // expression is a plain identifier, so `progress.have` would extract as {0} and tell a translator
     // nothing about what goes in the slot. The defaults on the gap are never rendered, since every
     // use of them sits behind `sourceGap &&`; they are here to keep the destructure typed as numbers.
-    const { have: haveCount, total: totalCount } = progress
+    const { have: haveCount } = progress
+    const totalCount = downloads.total
     // The total is the wanted chapters, so a series with unwanted ones read 100% here while the
     // Chapters tab counted everything listed. Named, and the rest counted, so the two agree.
     const notWanted = progress.nothingWanted ? 0 : Math.max(0, series.knownChapterCount - totalCount)
     const readCount = series.readChapterCount ?? 0
     const { highest = 0, total: listed = 0, missing = 0 } = sourceGap ?? {}
+    const gapExplanation = series.lockedFields.includes('totalChapters') ? (
+        <Trans>
+            Your sources only reach chapter {highest}, but the total you set is {listed}. Roughly{' '}
+            <Plural value={missing} one="# chapter" other="# chapters" /> can't be downloaded from the
+            sources linked here. Link another source to close the gap.
+        </Trans>
+    ) : (
+        <Trans>
+            Your sources only reach chapter {highest}, but MangaBaka lists {listed}. Roughly{' '}
+            <Plural value={missing} one="# chapter" other="# chapters" /> can't be downloaded from the
+            sources linked here. Link another source to close the gap.
+        </Trans>
+    )
 
     // One quiet line of facts rather than a row of coloured pills: none of these is a state anyone
     // acts on, so none of them earns a colour.
@@ -146,7 +195,7 @@ export function SeriesHero({
     // otherwise picking "Japanese" makes the name everything else in Maki uses (the folder on disk,
     // the file names, search) disappear from the page entirely.
     const altTitles = otherTitles(
-        readableTitles(series.altTitles, i18n.locale),
+        readableTitles(series.altTitles ?? [], i18n.locale),
         series.originalTitle,
         series.displayTitle,
     ).concat(series.displayTitle === series.title ? [] : [{ title: series.title, language: null }])
@@ -172,7 +221,7 @@ export function SeriesHero({
                     size="sm"
                     fw={600}
                 >
-                    <IconArrowLeft size={16} stroke={1.9} />
+                    <IconArrowLeft size={16} />
                     {label(back.label)}
                 </Text>
 
@@ -184,6 +233,7 @@ export function SeriesHero({
                                 className="series-hero-poster"
                                 src={series.coverUrl}
                                 alt={series.displayTitle}
+                                fetchPriority="high"
                             />
                         )}
 
@@ -197,14 +247,26 @@ export function SeriesHero({
                                 // Capped: a well-covered series carries dozens of these (One Piece
                                 // has 37), and the full list belongs in the Metadata card, not
                                 // wrapped across four lines under the heading.
-                                <Text size="sm" pt="xs" c="var(--ink-3)">
-                                    {altTitles.slice(0, MAX_HERO_ALT_TITLES).map((t) => t.title).join(' · ')}
-                                    {overflow > 0 && (
-                                        <>
-                                            {' · '}
-                                            <Plural value={overflow} one="+# more" other="+# more" />
-                                        </>
-                                    )}
+                                <Text
+                                    component="div"
+                                    size="sm"
+                                    pt="xs"
+                                    c="var(--ink-2)"
+                                    className="series-hero-alt"
+                                    title={altTitles.map((a) => a.title).join(', ')}
+                                >
+                                    <MetaList
+                                        items={[
+                                            ...altTitles.slice(0, MAX_HERO_ALT_TITLES).map((a, i) => (
+                                                <span key={i} lang={a.language ?? undefined}>
+                                                    {a.title}
+                                                </span>
+                                            )),
+                                            overflow > 0 && (
+                                                <Plural key="more" value={overflow} one="+# more" other="+# more" />
+                                            ),
+                                        ]}
+                                    />
                                 </Text>
                             )}
 
@@ -229,39 +291,42 @@ export function SeriesHero({
                     {label(status.label)}
                 </span>
 
-                                    {contentRating && (
-                                        <Tooltip label={t`Content rating`} withArrow>
-                    <span
-                        className="series-hero-status"
-                        data-quiet={ratingToken ? undefined : true}
-                        style={
-                            ratingToken
-                                ? {
-                                    color: `var(--${ratingToken})`,
-                                    background: `var(--${ratingToken}-soft)`,
-                                }
-                                : undefined
-                        }
-                    >
-                      <contentRating.Icon size={14} />
-                        {label(contentRating.label)}
-                    </span>
-                                        </Tooltip>
-                                    )}
+                                    <ContentRatingChip rating={series.contentRating} />
                                 </Group>
 
                                 <Group gap={8} wrap="nowrap">
                                     <Rating
                                         count={5}
                                         fractions={2}
-                                        value={series.rating ? series.rating / 2 : 0}
+                                        value={rating ? rating / 2 : 0}
+                                        color={soFar ? 'var(--ink-3)' : undefined}
                                         onChange={(v) => onRate(Math.round(v * 2) || null)}
                                     />
-                                    {series.rating ? (
+                                    {rating ? (
                                         <>
                                             <Text size="sm" fw={600} c="var(--ink-2)" className="tnum">
-                                                {series.rating}/10
+                                                {rating}/10
                                             </Text>
+                                            {soFar && (
+                                                <>
+                                                    <Text size="sm" c="var(--ink-4)">
+                                                        {soFarChapter != null
+                                                            ? <Trans>so far, at ch. {soFarChapter}</Trans>
+                                                            : <Trans>so far</Trans>}
+                                                    </Text>
+                                                    <Tooltip label={t`Make this my rating`} withArrow>
+                                                        <ActionIcon
+                                                            size="sm"
+                                                            variant="subtle"
+                                                            color="var(--neutral)"
+                                                            onClick={onFinalize}
+                                                            aria-label={t`Make this my rating`}
+                                                        >
+                                                            <IconCheck size={16} />
+                                                        </ActionIcon>
+                                                    </Tooltip>
+                                                </>
+                                            )}
                                             <Tooltip label={t`Clear rating`} withArrow>
                                                 <ActionIcon
                                                     size="sm"
@@ -270,9 +335,10 @@ export function SeriesHero({
                                                     onClick={() => onRate(null)}
                                                     aria-label={t`Clear rating`}
                                                 >
-                                                    <IconX size={14} />
+                                                    <IconX size={16} />
                                                 </ActionIcon>
                                             </Tooltip>
+                                            <RatingHistoryButton seriesId={series.id} />
                                         </>
                                     ) : (
                                         <Text size="sm" c="var(--ink-4)">
@@ -283,20 +349,40 @@ export function SeriesHero({
                             </Group>
 
                             {facts.length > 0 && (
-                                <Text size="sm" c="var(--ink-4)" mt={9}>
-                                    {facts.join(' · ')}
+                                <Text component="div" size="sm" c="var(--ink-4)" mt={9}>
+                                    <MetaList items={facts} />
                                 </Text>
                             )}
 
-                            <Group gap="xs" mt="lg" wrap="wrap">
+                            <Group gap="xs" mt="lg" wrap="wrap" className="series-hero-actions">
                                 {actions}
                             </Group>
                         </Stack>
                     </Group>
                     <Paper withBorder radius="lg" p="lg" className="series-hero-panel">
-                        <Title order={2} size="h3" fz="var(--type-section)">
-                            <Trans>Progress</Trans>
-                        </Title>
+                        <Group justify="space-between" wrap="nowrap" gap="xs">
+                            <Title order={2} size="h3" fz="var(--type-section)" lh={1}>
+                                <Trans>Progress</Trans>
+                            </Title>
+                            {series.knownChapterCount > 0 && (
+                                <ChapterCountsInfo
+                                    counts={{
+                                        listed: series.knownChapterCount,
+                                        wanted: totalCount,
+                                        nothingWanted: downloads.nothingWanted,
+                                        notWanted,
+                                        offNumbering: numbering.offNumbering,
+                                        fileMissing,
+                                        highestListed: numbering.highest,
+                                        totalChapters: series.totalChapters,
+                                        totalLocked: series.lockedFields.includes('totalChapters'),
+                                        readCount: readTracking ? series.readChapterCount : null,
+                                        readUpTo: readTracking ? readUpTo : null,
+                                        nextChapter,
+                                    }}
+                                />
+                            )}
+                        </Group>
 
                         {readTracking && series.readChapterCount != null && progress.have > 0 && (
                             <Box mt="md" className="series-progress-meter">
@@ -313,7 +399,7 @@ export function SeriesHero({
                                     radius="xl"
                                     aria-label={t`Reading progress`}
                                 />
-                                <Group justify="space-between" align="flex-start" wrap="nowrap" mt={9}>
+                                <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm" mt={9}>
                                     <Text size="sm" c="var(--ink-2)" className="tnum" style={{ flex: 1, minWidth: 0 }}>
                                         <Trans>
                                             {readCount} /{' '}
@@ -337,40 +423,30 @@ export function SeriesHero({
                             </Group>
                             <Progress
                                 mt={12}
-                                value={progress.pct}
-                                // Warn wins while a source gap exists, a separate claim the alert below already spells out.
-                                color={sourceGap ? 'var(--warn)' : progress.complete ? 'var(--ok)' : 'var(--brand)'}
+                                value={downloads.pct}
+                                // Never amber, even with a source gap: amber is kept for warnings, and the gap
+                                // has its own line below.
+                                color={downloads.complete ? 'var(--ok)' : 'var(--brand)'}
                                 radius="xl"
                                 aria-label={t`Download progress`}
                             />
-                            <Group justify="space-between" align="flex-start" wrap="nowrap" mt={9}>
+                            <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm" mt={9}>
                                 <Text size="sm" c="var(--ink-2)" className="tnum" style={{ flex: 1, minWidth: 0 }}>
                                     {/* Two whole messages rather than one with a clause appended: a
                                         fragment glued onto a translated sentence lands in the wrong place
                                         in any language that does not order it the way English does. */}
-                                    {series.knownChapterCount === 0 ? (
-                                        <Trans>No chapters listed</Trans>
-                                    ) : progress.nothingWanted ? (
-                                        <Trans>
-                                            {haveCount} /{' '}
-                                            <Plural value={totalCount} one="# chapter" other="# chapters" />{' '}
-                                            listed, none wanted
-                                        </Trans>
-                                    ) : notWanted > 0 ? (
-                                        <Trans>
-                                            {haveCount} /{' '}
-                                            <Plural value={totalCount} one="# wanted chapter" other="# wanted chapters" />
-                                        </Trans>
-                                    ) : (
-                                        <Trans>
-                                            {haveCount} /{' '}
-                                            <Plural value={totalCount} one="# chapter" other="# chapters" />
-                                        </Trans>
-                                    )}
+                                    <DownloadsCount
+                                        haveCount={downloads.have}
+                                        totalCount={totalCount}
+                                        nothingWanted={downloads.nothingWanted}
+                                        notWanted={notWanted}
+                                        allSwitchedOn={wantedSwitches >= totalCount}
+                                        noneListed={series.knownChapterCount === 0}
+                                    />
                                 </Text>
                                 {series.knownChapterCount > 0 && (
                                     <Text size="sm" fw={600} c="var(--ink-2)" className="tnum">
-                                        {Math.round(progress.pct)}%
+                                        {Math.round(downloads.pct)}%
                                     </Text>
                                 )}
                             </Group>
@@ -394,48 +470,28 @@ export function SeriesHero({
                             )}
                         </Box>
 
+                        {/* One line, not a card: a one-chapter gap was the loudest block on the page.
+                            The explanation is a hover or tap away. */}
                         {sourceGap && (
-                            <Alert
-                                mt="md"
-                                color="var(--warn)"
-                                variant="light"
-                                radius="md"
-                                icon={<IconAlertTriangle size={16} />}
+                            <Tooltip
+                                label={gapExplanation}
+                                withArrow
+                                multiline
+                                w={280}
+                                events={{ hover: true, focus: true, touch: true }}
                             >
-                                <Text size="xs" c="var(--ink-3)" style={{ lineHeight: 1.55 }}>
-                                    {series.lockedFields.includes('totalChapters') ? (
-                                        <Trans>
-                                            Your sources only reach chapter{' '}
-                                            <Text span fw={600} c="var(--ink)" className="tnum">
-                                                {highest}
-                                            </Text>
-                                            , but the total you set is{' '}
-                                            <Text span fw={600} c="var(--ink)" className="tnum">
-                                                {listed}
-                                            </Text>
-                                            . Roughly{' '}
-                                            <Plural value={missing} one="# chapter" other="# chapters" /> can't be
-                                            downloaded from the sources linked here. Link another source to close
-                                            the gap.
-                                        </Trans>
-                                    ) : (
-                                        <Trans>
-                                            Your sources only reach chapter{' '}
-                                            <Text span fw={600} c="var(--ink)" className="tnum">
-                                                {highest}
-                                            </Text>
-                                            , but MangaBaka lists{' '}
-                                            <Text span fw={600} c="var(--ink)" className="tnum">
-                                                {listed}
-                                            </Text>
-                                            . Roughly{' '}
-                                            <Plural value={missing} one="# chapter" other="# chapters" /> can't be
-                                            downloaded from the sources linked here. Link another source to close
-                                            the gap.
-                                        </Trans>
-                                    )}
+                                <Text size="xs" className="series-source-gap tnum" tabIndex={0}>
+                                    <IconAlertTriangle size={14} aria-hidden />
+                                    <span>
+                                        {series.lockedFields.includes('totalChapters') ? (
+                                            <Trans>Sources go up to ch. {highest}, your total is {listed}.</Trans>
+                                        ) : (
+                                            <Trans>Sources go up to ch. {highest}, MangaBaka lists {listed}.</Trans>
+                                        )}
+                                        <VisuallyHidden> {gapExplanation}</VisuallyHidden>
+                                    </span>
                                 </Text>
-                            </Alert>
+                            </Tooltip>
                         )}
                     </Paper>
                     {/* After the panel, not inside the title column: once the panel stacks, the tabs
@@ -448,6 +504,48 @@ export function SeriesHero({
 }
 
 /** The band's own shape while the series loads, so the page lands in place instead of jumping from a spinner. */
+/** The Downloads line. Its own component so its counts keep the names the catalogue knows them by. */
+function DownloadsCount({
+    haveCount,
+    totalCount,
+    nothingWanted,
+    notWanted,
+    allSwitchedOn,
+    noneListed,
+}: {
+    haveCount: number
+    totalCount: number
+    nothingWanted: boolean
+    notWanted: number
+    allSwitchedOn: boolean
+    noneListed: boolean
+}) {
+    if (noneListed) return <Trans>No chapters listed</Trans>
+    if (nothingWanted) {
+        return (
+            <Trans>
+                {haveCount} /{' '}
+                <Plural value={totalCount} one="# chapter" other="# chapters" />{' '}
+                listed, none wanted
+            </Trans>
+        )
+    }
+    if (notWanted > 0 && allSwitchedOn) {
+        return (
+            <Trans>
+                {haveCount} /{' '}
+                <Plural value={totalCount} one="# wanted" other="# wanted" />
+            </Trans>
+        )
+    }
+    return (
+        <Trans>
+            {haveCount} /{' '}
+            <Plural value={totalCount} one="# chapter" other="# chapters" />
+        </Trans>
+    )
+}
+
 export function SeriesHeroSkeleton() {
     return (
         <div aria-hidden>

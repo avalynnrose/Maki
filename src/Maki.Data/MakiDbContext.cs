@@ -33,12 +33,15 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
     public DbSet<UserRootFolder> UserRootFolders => Set<UserRootFolder>();
     public DbSet<UserSetting> UserSettings => Set<UserSetting>();
     public DbSet<UserSeriesState> UserSeriesStates => Set<UserSeriesState>();
+    public DbSet<RatingSnapshot> RatingSnapshots => Set<RatingSnapshot>();
     public DbSet<RecommendationFeedback> RecommendationFeedback => Set<RecommendationFeedback>();
     public DbSet<RecommendationFeedbackEvent> RecommendationFeedbackEvents => Set<RecommendationFeedbackEvent>();
+    public DbSet<ShortlistEntry> ShortlistEntries => Set<ShortlistEntry>();
     public DbSet<RecommendationSignalOverride> RecommendationSignalOverrides => Set<RecommendationSignalOverride>();
     public DbSet<RecommendationProfileState> RecommendationProfileStates => Set<RecommendationProfileState>();
     public DbSet<RecommendationMutationReceipt> RecommendationMutationReceipts => Set<RecommendationMutationReceipt>();
     public DbSet<AnimeSignal> AnimeSignals => Set<AnimeSignal>();
+    public DbSet<AnimeResumeRailDismissal> AnimeResumeRailDismissals => Set<AnimeResumeRailDismissal>();
     public DbSet<AuthEvent> AuthEvents => Set<AuthEvent>();
 
     public DbSet<Series> Series => Set<Series>();
@@ -69,6 +72,7 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
     public DbSet<ChapterProgress> ChapterProgress => Set<ChapterProgress>();
     public DbSet<PendingReadImport> PendingReadImports => Set<PendingReadImport>();
     public DbSet<ReaderBookmark> ReaderBookmarks => Set<ReaderBookmark>();
+    public DbSet<ChapterNote> ChapterNotes => Set<ChapterNote>();
     public DbSet<ReadingSession> ReadingSessions => Set<ReadingSession>();
     public DbSet<ReadingProfile> ReadingProfiles => Set<ReadingProfile>();
     public DbSet<Notification> Notifications => Set<Notification>();
@@ -94,7 +98,10 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
     public DbSet<QualityFormat> QualityFormats => Set<QualityFormat>();
     public DbSet<UpgradeAttempt> UpgradeAttempts => Set<UpgradeAttempt>();
     public DbSet<SourceQualitySample> SourceQualitySamples => Set<SourceQualitySample>();
+    public DbSet<SourceFailure> SourceFailures => Set<SourceFailure>();
     public DbSet<UpgradeHistory> UpgradeHistory => Set<UpgradeHistory>();
+    public DbSet<PageConversionRule> PageConversionRules => Set<PageConversionRule>();
+    public DbSet<PageConversionHistory> PageConversionHistory => Set<PageConversionHistory>();
     public DbSet<RecycleBinEntry> RecycleBin => Set<RecycleBinEntry>();
     public DbSet<TorrentProposal> TorrentProposals => Set<TorrentProposal>();
     public DbSet<SeriesMetadataChange> SeriesMetadataChanges => Set<SeriesMetadataChange>();
@@ -274,10 +281,27 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             e.HasQueryFilter(s => _scope.Unrestricted || s.UserId == _scope.UserId);
         });
 
+        modelBuilder.Entity<RatingSnapshot>(e =>
+        {
+            e.HasIndex(s => new { s.UserId, s.SeriesId, s.CreatedAt });
+            e.HasOne<MakiUser>().WithMany().HasForeignKey(s => s.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Series>().WithMany().HasForeignKey(s => s.SeriesId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(s => _scope.Unrestricted || s.UserId == _scope.UserId);
+        });
+
         modelBuilder.Entity<RecommendationFeedback>(e =>
         {
             e.Property(x => x.Revision).IsConcurrencyToken();
             e.HasIndex(x => new { x.UserId, x.Provider, x.ProviderId }).IsUnique();
+            e.HasOne<MakiUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => _scope.Unrestricted || x.UserId == _scope.UserId);
+        });
+        modelBuilder.Entity<ShortlistEntry>(e =>
+        {
+            e.HasIndex(x => new { x.UserId, x.MangaBakaId }).IsUnique();
+            e.Property(x => x.Title).HasMaxLength(ShortlistEntry.TitleMaxLength);
+            e.Property(x => x.Note).HasMaxLength(ShortlistEntry.NoteMaxLength);
+            e.Property(x => x.SavedFromDetail).HasMaxLength(ShortlistEntry.SavedFromDetailMaxLength);
             e.HasOne<MakiUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(x => _scope.Unrestricted || x.UserId == _scope.UserId);
         });
@@ -305,6 +329,12 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
         {
             e.HasIndex(x => new { x.UserId, x.Service, x.AnimeId }).IsUnique();
             e.HasIndex(x => new { x.UserId, x.MangaBakaId });
+            e.HasOne<MakiUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => _scope.Unrestricted || x.UserId == _scope.UserId);
+        });
+        modelBuilder.Entity<AnimeResumeRailDismissal>(e =>
+        {
+            e.HasIndex(x => new { x.UserId, x.MangaBakaId }).IsUnique();
             e.HasOne<MakiUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(x => _scope.Unrestricted || x.UserId == _scope.UserId);
         });
@@ -395,6 +425,8 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             e.HasIndex(s => s.SortTitle);
             e.HasIndex(s => s.MangaBakaId);
             e.HasIndex(s => s.NextCheckAt);
+            e.HasIndex(s => s.ArchivedAt);
+            e.HasOne<MakiUser>().WithMany().HasForeignKey(s => s.ArchivedByUserId).OnDelete(DeleteBehavior.SetNull);
             e.Property(s => s.Genres).HasConversion(StringListConverter.Instance, StringListComparer.Instance);
             e.Property(s => s.Tags).HasConversion(StringListConverter.Instance, StringListComparer.Instance);
             e.Property(s => s.AltTitles).HasConversion(LocalizedTitleListConverter.Instance, LocalizedTitleListComparer.Instance);
@@ -508,6 +540,10 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             // Also serves every plain SeriesId lookup, and the library list's GROUP BY SeriesId, SourceName.
             e.HasIndex(f => new { f.SeriesId, f.SourceName });
 
+            // Covers the library list's newest file per series (GROUP BY SeriesId, MAX(DateAdded)),
+            // which otherwise reads every row of the table for its date.
+            e.HasIndex(f => new { f.SeriesId, f.DateAdded });
+
             // Home's "recently added" rail is an ORDER BY DateAdded DESC LIMIT n; without this it
             // is a full scan plus a sort of every file in the library on every landing-page load.
             e.HasIndex(f => f.DateAdded);
@@ -518,6 +554,7 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
 
             // Same idea for page conversion's pass over the library.
             e.HasIndex(f => f.ConversionCheckedAtUtc).HasFilter("ConversionCheckedAtUtc IS NULL");
+            e.HasIndex(f => f.ConversionQueuedAtUtc).HasFilter("ConversionQueuedAtUtc IS NOT NULL");
 
             e.HasOne<Series>().WithMany().HasForeignKey(f => f.SeriesId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -573,6 +610,7 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             // MAX(SortOrder) on every enqueue spans settled rows too, which the partial index omits.
             e.HasIndex(q => q.SortOrder);
             e.HasIndex(q => q.HealthOperationId);
+            e.HasIndex(q => q.ClientRemovalPendingAt).HasFilter("\"ClientRemovalPendingAt\" IS NOT NULL");
 
             // One active row per chapter. SQLite allows any number of NULLs in a unique index, so
             // settled rows never collide.
@@ -592,6 +630,14 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             e.HasOne(s => s.SourceMapping).WithMany().HasForeignKey(s => s.SourceMappingId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(s => new { s.SourceMappingId, s.ChapterId }).IsUnique();
             e.HasIndex(s => s.SeriesId);
+        });
+
+        modelBuilder.Entity<SourceFailure>(e =>
+        {
+            e.HasQueryFilter(f => _scope.Unrestricted || Series.Any(x => x.Id == f.SeriesId));
+            e.HasOne(f => f.SourceMapping).WithMany().HasForeignKey(f => f.SourceMappingId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(f => new { f.SourceMappingId, f.OccurredAtUtc });
+            e.HasIndex(f => f.OccurredAtUtc);
         });
 
         modelBuilder.Entity<UpgradeAttempt>(e =>
@@ -614,6 +660,15 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             e.HasOne<Chapter>().WithMany().HasForeignKey(h => h.ChapterId).OnDelete(DeleteBehavior.Cascade);
             // No FK to ChapterFile: a torrent replacement removes the superseded file's row and its
             // history has to outlive it so the group can be reverted.
+        });
+
+        modelBuilder.Entity<PageConversionHistory>(e =>
+        {
+            e.HasQueryFilter(h => _scope.Unrestricted || Series.Any(s => s.Id == h.SeriesId));
+            e.HasIndex(h => new { h.SeriesId, h.UndoneAtUtc });
+            e.HasOne<Series>().WithMany().HasForeignKey(h => h.SeriesId).OnDelete(DeleteBehavior.Cascade);
+            // No FK to ChapterFile or Chapter: the original in the trash outlives both, and the purge
+            // still has to find it by this row.
         });
 
         modelBuilder.Entity<SeriesMetadataChange>(e =>
@@ -819,6 +874,28 @@ public class MakiDbContext(DbContextOptions<MakiDbContext> options, DataScope? s
             e.HasOne<Chapter>().WithMany().HasForeignKey(b => b.ChapterId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<MakiUser>().WithMany().HasForeignKey(b => b.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasQueryFilter(b => _scope.Unrestricted || b.UserId == _scope.UserId);
+        });
+
+        modelBuilder.Entity<ChapterNote>(e =>
+        {
+            e.HasIndex(n => n.ChapterId);
+            e.HasIndex(n => n.SeriesId);
+            e.HasIndex(n => n.AuthorId);
+            e.HasIndex(n => n.ParentId);
+            e.Property(n => n.Body).HasMaxLength(ChapterNote.MaxBodyLength);
+            e.HasOne<Series>().WithMany().HasForeignKey(n => n.SeriesId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Chapter>().WithMany().HasForeignKey(n => n.ChapterId).OnDelete(DeleteBehavior.Cascade);
+
+            // Not Cascade: a tombstoned root keeps its author, so a cascade would delete it and the
+            // self-reference would take everyone else's replies with it. Account deletion cleans up
+            // first (ChapterNoteService.ForgetAuthorAsync).
+            e.HasOne<MakiUser>().WithMany().HasForeignKey(n => n.AuthorId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne<ChapterNote>().WithMany().HasForeignKey(n => n.ParentId).OnDelete(DeleteBehavior.Cascade);
+
+            // Mine, or shared on a series I can see. Admins get no bypass: private means private.
+            e.HasQueryFilter(n => _scope.Unrestricted ||
+                (Series.Any(s => s.Id == n.SeriesId) &&
+                 (n.AuthorId == _scope.UserId || n.Visibility == NoteVisibility.Shared)));
         });
 
         modelBuilder.Entity<ReadingSession>(e =>

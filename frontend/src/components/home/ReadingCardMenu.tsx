@@ -1,12 +1,10 @@
 import { errorText } from '../../api/errorText'
 import { useNavigate } from 'react-router-dom'
 import { ActionIcon, Button, Group, Menu, Text } from '@mantine/core'
-import { notifications } from '@mantine/notifications'
-import { IconBook, IconDots, IconEyeOff } from '@tabler/icons-react'
+import { notifications } from '../../lib/toast'
+import { IconArrowRight, IconDots, IconEyeOff } from '../../lib/icons'
 import { Trans, useLingui } from '@lingui/react/macro'
 import { useHideHomeReading, type HomeReadingItem } from '../../api/hooks'
-
-export type ReadingRailKind = 'continue' | 'jumpback'
 
 /**
  * The small menu on a reading-rail card or tile. A sibling of the card's link, never inside it:
@@ -15,13 +13,11 @@ export type ReadingRailKind = 'continue' | 'jumpback'
  */
 export function ReadingCardMenu({
   item,
-  rail,
   className,
   variant = 'filled',
   size = 28,
 }: {
   item: HomeReadingItem
-  rail: ReadingRailKind
   className: string
   /** `default` sits it in a row of buttons; the filled round default floats over a cover. */
   variant?: 'filled' | 'default'
@@ -82,12 +78,12 @@ export function ReadingCardMenu({
         </ActionIcon>
       </Menu.Target>
       <Menu.Dropdown>
-        <Menu.Item leftSection={<IconBook size={16} />} onClick={() => navigate(`/series/${seriesId}`)}>
+        <Menu.Item leftSection={<IconArrowRight size={16} />} onClick={() => navigate(`/series/${seriesId}`)}>
           <Trans>Open series</Trans>
         </Menu.Item>
         <Menu.Divider />
         <Menu.Item leftSection={<IconEyeOff size={16} />} onClick={() => void remove()}>
-          {rail === 'continue' ? t`Remove from Continue reading` : t`Remove from Jump back in`}
+          <Trans>Remove from Continue reading</Trans>
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>

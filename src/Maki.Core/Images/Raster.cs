@@ -49,6 +49,13 @@ public sealed class Raster
         Pixels = pixels;
     }
 
+    /// <summary>Takes <paramref name="pixels"/> as they are, without a copy.</summary>
+    internal static Raster Wrap(int width, int height, int bands, byte[] pixels)
+    {
+        if (pixels.Length != width * height * bands) throw new ArgumentException("Pixel count does not match the size", nameof(pixels));
+        return new Raster(width, height, bands, pixels);
+    }
+
     public Rgba this[int x, int y]
     {
         get
@@ -137,7 +144,7 @@ public sealed class Raster
     /// Converts whatever was stored (greyscale, CMYK, 16-bit, an embedded profile) to plain 8-bit
     /// sRGB, so the pixel values are the ones a browser would show.
     /// </summary>
-    private static VipsImage ToSrgb(VipsImage image)
+    internal static VipsImage ToSrgb(VipsImage image)
     {
         if (image.Contains("icc-profile-data"))
         {

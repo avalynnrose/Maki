@@ -14,6 +14,7 @@ import { useAnimeSignals, useSetAnimeSignalsEnabled, useSetAnimeSignalsStrength 
 import { useMutateSignalOverride, useSignalOverrides } from '../../api/recommendationFeedback'
 import { formatDateTime, formatDecimal, formatFixedDecimal } from '../../format'
 import { SeriesThumb } from '../stats/SeriesLink'
+import { MetaList } from '../../components/ui/MetaList'
 
 export type RoleFilter = AnimeSignalRole | 'all'
 
@@ -36,25 +37,25 @@ export function AnimeSignalsStatusLine({ data }: { data: AnimeSignalsData }) {
   const synced = data.lastSyncAtUtc ? formatDateTime(data.lastSyncAtUtc) : ''
 
   return (
-    <>
-      {data.lastSyncAtUtc ? t`Last synced ${synced}` : t`Not synced yet`}
-      {data.counts && (() => {
-        const matched = data.counts.matched
-        const total = data.counts.total
-        const positive = data.counts.positive
-        const avoided = data.counts.avoided
-        const superseded = data.counts.superseded
-        return (
-          <>
-            {' · '}
-            <Trans>
+    <MetaList
+      inline
+      items={[
+        data.lastSyncAtUtc ? t`Last synced ${synced}` : t`Not synced yet`,
+        data.counts && (() => {
+          const matched = data.counts.matched
+          const total = data.counts.total
+          const positive = data.counts.positive
+          const avoided = data.counts.avoided
+          const superseded = data.counts.superseded
+          return (
+            <Trans key="counts">
               {matched} of {total} matched, {positive} positive,{' '}
               {avoided} avoided, {superseded} already yours
             </Trans>
-          </>
-        )
-      })()}
-    </>
+          )
+        })(),
+      ]}
+    />
   )
 }
 
@@ -291,12 +292,12 @@ export function AnimeSignalRow({ entry }: { entry: AnimeSignalEntry }) {
     switch (entry.role) {
       case 'positive': return { label: t`Positive`, color: 'var(--ok)' }
       case 'avoided': return { label: t`Avoided`, color: 'var(--danger)' }
-      case 'neutral': return { label: t`Neutral`, color: 'gray' }
+      case 'neutral': return { label: t`Neutral`, color: 'var(--neutral)' }
       case 'superseded':
         return entry.supersededBy === 'ignored'
-          ? { label: t`Excluded`, color: 'gray' }
-          : { label: t`Already yours`, color: 'gray' }
-      default: return { label: t`Unmatched`, color: 'gray' }
+          ? { label: t`Excluded`, color: 'var(--neutral)' }
+          : { label: t`Already yours`, color: 'var(--brand)' }
+      default: return { label: t`Unmatched`, color: 'var(--neutral)' }
     }
   })()
 

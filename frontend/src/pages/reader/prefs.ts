@@ -4,12 +4,23 @@ import { api } from '../../api/client'
 import { readerSettingsQuery } from '../../api/reader'
 import type { PrefsSource, ReaderManifest, ResolvedReaderPrefs } from '../../api/reader'
 import { useReadingProfiles, type ReadingProfile } from '../../api/readingProfiles'
+import type { QualityTierName } from '../../api/upgrades'
 
 export type ReaderMode = 'paged' | 'double' | 'vertical'
 export type ReaderDirection = 'ltr' | 'rtl'
 export type ReaderFit = 'width' | 'height' | 'screen' | 'original'
 export type ReaderFilter = 'none' | 'grayscale' | 'sepia' | 'invert'
 export type ReaderSplitWide = 'off' | 'split' | 'rotate'
+export type ReaderEnhance = 'off' | 'auto' | 'always'
+export type EnhanceMethod =
+  | 'a4k-s'
+  | 'a4k-m'
+  | 'a4k-a'
+  | 'server:span-s'
+  | 'server:realesrgan-av3'
+  | 'server:maki-2x'
+export type EnhanceFallback = 'a4k-s' | 'a4k-m' | 'a4k-a' | 'off'
+export type EnhanceProgress = 'line' | 'detailed' | 'off'
 
 export interface ReaderPrefs {
   mode: ReaderMode
@@ -38,6 +49,20 @@ export interface ReaderPrefs {
   cropBorders: boolean
   /** Open a chapter of very tall pages in continuous mode. The server fills it per layer: on for the defaults, off for a profile or override that never set it. */
   autoWebtoon: boolean
+  /** Sharpen soft pages: never, only when a page is shown larger than its source or looks blurry, or always. */
+  enhance: ReaderEnhance
+  /** Browser shader preset (`a4k-*`) or a model on the server (`server:*`). */
+  enhanceMethod: EnhanceMethod
+  /** The browser preset a server method shows until its upscale is ready, or `off` for the plain page. */
+  enhanceFallback: EnhanceFallback
+  /** Chapters whose file has one of these quality tiers are never enhanced. */
+  enhanceSkipTiers: QualityTierName[]
+  /** How a server upscale in progress shows while the bars are hidden. The toolbar shows it whenever they are up. */
+  enhanceProgress: EnhanceProgress
+  /** Show the chapter's notes in the margin beside the page when the screen leaves room. */
+  notesBeside: boolean
+  /** With a server method, keep upscaling the rest of the open chapter behind the window. Leaving cancels what is left. */
+  enhanceWholeChapter: boolean
 }
 
 /** The two page backgrounds. OLED is true black so the panel edge disappears on an OLED panel. */
@@ -51,6 +76,9 @@ export const BACKGROUNDS = {
  * base for a merge. What a series actually opens with is resolved on the server: its own override,
  * then a pinned reading profile, then the profile claiming its type, then these.
  */
+/** Maki 2x; the reader shows `enhanceFallback` wherever the server does not offer it. */
+export const DEFAULT_ENHANCE_METHOD: EnhanceMethod = 'server:maki-2x'
+
 export const DEFAULT_PREFS: ReaderPrefs = {
   mode: 'paged',
   direction: 'rtl',
@@ -69,6 +97,18 @@ export const DEFAULT_PREFS: ReaderPrefs = {
   splitWide: 'off',
   cropBorders: false,
   autoWebtoon: true,
+  enhance: 'off',
+  enhanceMethod: DEFAULT_ENHANCE_METHOD,
+  enhanceFallback: 'a4k-m',
+  enhanceSkipTiers: ['volume'],
+  enhanceProgress: 'line',
+  notesBeside: true,
+  enhanceWholeChapter: false,
+}
+
+/** The enhance level a chapter actually gets: off when its file's tier is one the prefs skip. */
+export function enhanceFor(prefs: Pick<ReaderPrefs, 'enhance' | 'enhanceSkipTiers'>, tier: QualityTierName | undefined): ReaderEnhance {
+  return tier && prefs.enhanceSkipTiers.includes(tier) ? 'off' : prefs.enhance
 }
 
 /** The CSS filter for the page images, or undefined when the prefs ask for none. */

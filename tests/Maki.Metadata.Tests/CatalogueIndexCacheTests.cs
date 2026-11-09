@@ -1,6 +1,5 @@
 ﻿using Maki.Metadata.Catalogue;
 using Maki.Metadata.MangaBaka;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Maki.Metadata.Tests;
@@ -11,9 +10,9 @@ public class CatalogueIndexCacheTests : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private CatalogueIndexCache Cache(ILogger<CatalogueIndexCache>? logger = null) => new(
+    private CatalogueIndexCache Cache() => new(
         new MangaBakaDumpOptions(_db.Path, Path.GetDirectoryName(_db.Path)!),
-        logger ?? NullLogger<CatalogueIndexCache>.Instance);
+        NullLogger<CatalogueIndexCache>.Instance);
 
     [Fact]
     public async Task Different_queries_reuse_the_same_catalogue_indexes()
@@ -23,6 +22,9 @@ public class CatalogueIndexCacheTests : IDisposable
             .BuildSearchIndex();
         var cache = Cache();
         var first = (await cache.GetAsync())!;
+        // A fresh build is swapped for its memory-mapped twin once the background snapshot save lands.
+        await cache.SnapshotSavedForTest;
+        first = (await cache.GetAsync())!;
         Assert.True(first.Credits.TryResolve("Kentaro Miura", CreditRole.Author, out _));
 
         var later = (await cache.GetAsync())!;
@@ -39,10 +41,11 @@ public class CatalogueIndexCacheTests : IDisposable
     public async Task A_waiting_search_rechecks_the_dump_stamp_before_reusing_an_index()
     {
         _db.AddSeries(1, "First", authorsJson: """["Original Author"]""").BuildSearchIndex();
-        using var logger = new PausingLogger();
-        var cache = Cache(logger);
+        using var pause = new PauseFirstBuild();
+        var cache = Cache();
+        cache.AfterCreditsBuiltForTest = pause.OnCreditsBuilt;
         var first = cache.GetAsync();
-        await logger.CreditsBuilt.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await pause.CreditsBuilt.Task.WaitAsync(TimeSpan.FromSeconds(10));
         // This caller observes the old stamp, then waits behind the first build.
         var waiting = cache.GetAsync();
         Task<CatalogueIndexes?> latest;
@@ -55,7 +58,7 @@ public class CatalogueIndexCacheTests : IDisposable
         }
         finally
         {
-            logger.Resume.Set();
+            pause.Resume.Set();
         }
 
         var original = (await first)!;
@@ -63,24 +66,27 @@ public class CatalogueIndexCacheTests : IDisposable
         Assert.False(original.Credits.TryResolve("New Author", CreditRole.Author, out _));
         Assert.True(refreshed.Credits.TryResolve("New Author", CreditRole.Author, out _));
         Assert.NotSame(original, refreshed);
-        Assert.Same(refreshed, await latest);
-        Assert.Same(refreshed, await cache.GetAsync());
-        Assert.Equal(2, logger.Builds);
+        // A fresh build is swapped for its memory-mapped twin once the background snapshot save lands.
+        await cache.SnapshotSavedForTest;
+        var settled = (await cache.GetAsync())!;
+        Assert.True(settled.Credits.TryResolve("New Author", CreditRole.Author, out _));
+        // Either caller can be the one that starts the second build, and the other may arrive after
+        // the snapshot swap, so which instance each holds varies; both must be the new generation.
+        var last = (await latest)!;
+        Assert.True(last.Credits.TryResolve("New Author", CreditRole.Author, out _));
+        Assert.Same(settled, await cache.GetAsync());
+        Assert.Equal(2, pause.Builds);
     }
 
-    private sealed class PausingLogger : ILogger<CatalogueIndexCache>, IDisposable
+    private sealed class PauseFirstBuild : IDisposable
     {
         public TaskCompletionSource CreditsBuilt { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ManualResetEventSlim Resume { get; } = new();
         private int _builds;
         public int Builds => _builds;
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
+        public void OnCreditsBuilt()
         {
-            if (!formatter(state, exception).StartsWith("Built the credit index:", StringComparison.Ordinal)) return;
             if (Interlocked.Increment(ref _builds) != 1) return;
             CreditsBuilt.SetResult();
             if (!Resume.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Test did not release the build");
@@ -95,6 +101,9 @@ public class CatalogueIndexCacheTests : IDisposable
         _db.AddSeries(1, "Berserk", authorsJson: """["Kentaro Miura"]""").BuildSearchIndex();
         var cache = Cache();
         var first = (await cache.GetAsync())!;
+        // A fresh build is swapped for its memory-mapped twin once the background snapshot save lands.
+        await cache.SnapshotSavedForTest;
+        first = (await cache.GetAsync())!;
 
         // Just read, so nothing goes yet. This is the half that matters: a window that fired while
         // the cache was being read every second would reload it on a timer forever.

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, waitFor, within } from 'storybook/test'
-import { IconCalendarStats } from '@tabler/icons-react'
+import { IconCalendarStats } from '../../lib/icons'
 import { customRails, homePage } from '../../../.storybook/mocks/home'
 import { HOME_SECTION_DEFS } from '../home/homeSectionDefs'
 import type { SectionDef } from './pageLayout'
@@ -33,7 +33,7 @@ export const HeroSection: Story = {
   play: async ({ canvasElement }) => {
     const panel = await drawer(canvasElement)
     await waitFor(() => expect(within(panel).getByRole('switch', { name: /Lead with a hero/ })).toBeChecked())
-    await expect(await within(panel).findByText('Series with a chapter part-way through.')).toBeVisible()
+    await expect(await within(panel).findByText('The series you read most recently, part-way through a chapter or ready for the next one.')).toBeVisible()
   },
 }
 

@@ -3,6 +3,7 @@ using Maki.Api.Dtos;
 using Maki.Api.Hubs;
 using Maki.Api.Localization;
 using Maki.Api.Services;
+using Maki.Core.Configuration;
 using Maki.Core.Entities;
 using Maki.Core.Inbox;
 using Maki.Core.Metadata;
@@ -41,7 +42,8 @@ public class SeriesRequestsController(
     NotificationService notifications,
     SeriesRequestSubmitter submitter,
     ICurrentUser currentUser,
-    ILogger<SeriesRequestsController> logger) : ControllerBase
+    ILogger<SeriesRequestsController> logger,
+    IAppSettings? appSettings = null) : ControllerBase
 {
     private bool IsAdmin => currentUser.Has(MakiPermission.Admin);
 
@@ -323,7 +325,14 @@ public class SeriesRequestsController(
                 {
                     // Everything except "somebody already added it" leaves the request unresolved, so
                     // the claim has to go back or it sits in Processing until the stale window expires.
-                    if (result.Error is not SeriesCreationError.AlreadyInLibrary)
+                    if (result.Error is SeriesCreationError.ArchivedInLibrary && result.ExistingSeriesId is int archivedId
+                        && await db.Series.AnyAsync(s => s.Id == archivedId, ct))
+                    {
+                        await ReleaseClaimAsync(request);
+                        return this.ArchivedExists(localizer, archivedId);
+                    }
+
+                    if (result.Error is not (SeriesCreationError.AlreadyInLibrary or SeriesCreationError.ArchivedInLibrary))
                     {
                         await ReleaseClaimAsync(request);
                         return result.Error switch
@@ -377,6 +386,18 @@ public class SeriesRequestsController(
                 // it would only tell the requester their chapters are on the way.
                 await ReleaseClaimAsync(request);
                 return this.Conflict(localizer, "error.requests.seriesGone");
+            }
+
+            // The queue would drop every chapter of an archived series, and the request would read
+            // as approved with nothing on the way.
+            // Unfiltered, or a series outside the caller's root folders reads as active.
+            if (await db.Series.IgnoreQueryFilters().AnyAsync(s => s.Id == seriesId && s.ArchivedAt != null, ct))
+            {
+                await ReleaseClaimAsync(request);
+                // Like Add: the id only goes to a caller who can open the series.
+                return await db.Series.AnyAsync(s => s.Id == seriesId, ct)
+                    ? this.ArchivedExists(localizer, seriesId)
+                    : this.Conflict(localizer, "error.series.alreadyExists");
             }
 
             queued = await QueueRangeAsync(
@@ -723,8 +744,9 @@ public class SeriesRequestsController(
         number?.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
 
     /// <summary>
-    /// Resolves the requester, resolver and editor display names in one query for the whole page,
-    /// rather than one lookup per row.
+    /// Resolves the requester, resolver and editor names in one query for the whole page, rather than
+    /// one lookup per row, each through <see cref="UserNameVisibility"/> so a login name stays hidden
+    /// from readers who may not see it.
     /// </summary>
     private async Task<List<SeriesRequestDto>> ToDtosAsync(IReadOnlyList<SeriesRequest> rows, CancellationToken ct)
     {
@@ -734,10 +756,14 @@ public class SeriesRequestsController(
             .Distinct()
             .ToList();
 
-        var names = await db.Users
-            .Where(u => ids.Contains(u.Id))
-            .Select(u => new { u.Id, Name = u.DisplayName ?? u.UserName })
-            .ToDictionaryAsync(u => u.Id, u => u.Name ?? string.Empty, ct);
+        var loginNamesVisible = await UserNameVisibility.LoginNamesVisibleAsync(appSettings, ct);
+        var names = (await db.Users
+                .Where(u => ids.Contains(u.Id))
+                .Select(u => new { u.Id, u.DisplayName, u.UserName })
+                .ToListAsync(ct))
+            .ToDictionary(
+                u => u.Id,
+                u => UserNameVisibility.For(currentUser, u.Id, u.DisplayName, u.UserName, loginNamesVisible));
 
         return [.. rows.Select(r => SeriesRequestDto.FromEntity(
             r,

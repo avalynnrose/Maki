@@ -1,4 +1,5 @@
 using System.Runtime;
+using Maki.Core.Io;
 
 namespace Maki.Api.Jobs;
 
@@ -28,11 +29,48 @@ namespace Maki.Api.Jobs;
 public sealed class ArtifactBuildGate(ILogger<ArtifactBuildGate> logger)
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Lock _sync = new();
+    private TaskCompletionSource _idle = Completed();
     private int _waiting;
     private int _built;
     private int _collections;
 
     internal int Collections => Volatile.Read(ref _collections);
+
+    /// <summary>
+    /// Completes once no artifact build holds the gate. Page conversion and health verifies wait on
+    /// it between files, so a dump install (a whole-file write plus index pass) never stacks with an
+    /// encoder or a verify. They are not artifact builds themselves: holding the gate for a whole
+    /// conversion pass would stall every build behind it for hours.
+    /// </summary>
+    public bool IsIdle
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _idle.Task.IsCompleted;
+            }
+        }
+    }
+
+    public Task WaitUntilIdleAsync(CancellationToken ct)
+    {
+        Task idle;
+        lock (_sync)
+        {
+            idle = _idle.Task;
+        }
+
+        return idle.WaitAsync(ct);
+    }
+
+    private static TaskCompletionSource Completed()
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        done.SetResult();
+        return done;
+    }
 
     /// <summary>
     /// Waits for the other builds to finish. Dispose the result to let the next one in; a
@@ -56,6 +94,14 @@ public sealed class ArtifactBuildGate(ILogger<ArtifactBuildGate> logger)
             }
         }
 
+        lock (_sync)
+        {
+            if (_idle.Task.IsCompleted)
+            {
+                _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
         return new BuildLease(this);
     }
 
@@ -68,14 +114,15 @@ public sealed class ArtifactBuildGate(ILogger<ArtifactBuildGate> logger)
     /// arrays. The large object heap is not compacted by default, so what it leaves behind is holes
     /// the process keeps: measured six minutes into a start on a NAS, 84 MB of the 245 MB managed
     /// heap was fragmentation, on top of 157 MB of large objects. Nothing would have compacted that
-    /// until the next idle unload, an hour later at the earliest.
+    /// until the next idle unload, then an hour later at the earliest.
     /// </para>
     ///
     /// <para>
     /// A forced blocking compaction is normally the wrong tool. It is the right one at exactly this
     /// point: the build that just finished is the expensive thing, the queue behind it is empty, and
-    /// the alternative is carrying its holes for an hour. Skipped when another build is waiting -
-    /// it would only have to be done again, and the pending flag carries to whichever build is last.
+    /// the alternative is carrying its holes until the next unload. Skipped when another build is
+    /// waiting - it would only have to be done again, and the pending flag carries to whichever
+    /// build is last.
     /// </para>
     /// </summary>
     private void Release()
@@ -83,8 +130,18 @@ public sealed class ArtifactBuildGate(ILogger<ArtifactBuildGate> logger)
         if (Volatile.Read(ref _waiting) == 0 && Interlocked.Exchange(ref _built, 0) == 1)
         {
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            // Aggressive, so the freed regions are decommitted rather than kept for the next build.
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            NativeHeap.Trim();
             Interlocked.Increment(ref _collections);
+        }
+
+        if (Volatile.Read(ref _waiting) == 0)
+        {
+            lock (_sync)
+            {
+                _idle.TrySetResult();
+            }
         }
 
         _gate.Release();

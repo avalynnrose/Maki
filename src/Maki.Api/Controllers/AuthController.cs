@@ -16,7 +16,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Maki.Api.Hubs;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using System.Security.Claims;
@@ -92,14 +91,15 @@ public class AuthController(
         var oidcLogin = await OidcLoginAsync(user);
         return Ok(UserDtoMapper.ToMe(
             user, await RootFolderIdsAsync(user, ct), oidcLogin is not null, oidcLogin?.ProviderDisplayName,
-            await SingleUserMode.IsOnAsync(db, appSettings, ct)));
+            await SingleUserMode.IsOnAsync(db, appSettings, ct),
+            await UserNameVisibility.LoginNamesVisibleAsync(appSettings, ct)));
     }
 
     private const string UnknownName = "?";
 
     [HttpPost("login")]
     [AllowAnonymous]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     public async Task<IActionResult> Login(
         [FromBody] LoginRequest request, [FromServices] AuthRuntimeOptions authOptions, CancellationToken ct)
     {
@@ -198,7 +198,7 @@ public class AuthController(
     /// </summary>
     [HttpPost("2fa")]
     [AllowAnonymous]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     public async Task<IActionResult> TwoFactor([FromBody] TwoFactorRequest request, CancellationToken ct)
     {
         var code = request.Code?.Replace(" ", string.Empty).Replace("-", string.Empty);
@@ -308,7 +308,7 @@ public class AuthController(
     /// </summary>
     [HttpPost("setup")]
     [AllowAnonymous]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     public async Task<IActionResult> Setup(
         [FromBody] SetupRequest request, [FromServices] AuthRuntimeOptions authOptions, CancellationToken ct)
     {
@@ -353,7 +353,7 @@ public class AuthController(
         }
 
         user.PendingSetup = false;
-        user.DisplayName = request.DisplayName?.Trim();
+        user.DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? null : request.DisplayName.Trim();
         // Belt and braces: the migration already set these, but setup is what makes the account
         // real and an admin that cannot administer would be unrecoverable.
         user.Permissions |= MakiPermission.Admin;
@@ -391,7 +391,7 @@ public class AuthController(
     /// </summary>
     [HttpGet("oidc/challenge")]
     [AllowAnonymous]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     public async Task<IActionResult> OidcChallenge([FromQuery] string? returnUrl)
     {
         if (!oidc.Enabled)
@@ -442,7 +442,7 @@ public class AuthController(
     /// </summary>
     [HttpGet("oidc/complete")]
     [AllowAnonymous]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     public async Task<IActionResult> OidcCallback([FromQuery] string? returnUrl, CancellationToken ct)
     {
         if (!oidc.Enabled)
@@ -529,7 +529,7 @@ public class AuthController(
     /// </para>
     /// </summary>
     [HttpGet("oidc/link")]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     [CookieSessionOnly]
     public async Task<IActionResult> OidcLink()
     {
@@ -572,7 +572,7 @@ public class AuthController(
     /// login on any account would let a stolen session attach the thief's own provider account.
     /// </summary>
     [HttpPost("oidc/link")]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     [CookieSessionOnly]
     public async Task<IActionResult> OidcLinkConfirm([FromBody] ConfirmPasswordRequest request)
     {
@@ -608,7 +608,7 @@ public class AuthController(
     /// external cookie says signed in.
     /// </summary>
     [HttpGet("oidc/link-complete")]
-    [EnableRateLimiting(RateLimitPolicies.Auth)]
+    [LoginRateLimit]
     [CookieSessionOnly]
     public async Task<IActionResult> OidcLinkComplete(CancellationToken ct)
     {
@@ -750,7 +750,8 @@ public class AuthController(
         var oidcLogin = await OidcLoginAsync(user);
         return UserDtoMapper.ToMe(
             user, await RootFolderIdsAsync(user, ct), oidcLogin is not null, oidcLogin?.ProviderDisplayName,
-            await SingleUserMode.IsOnAsync(db, HttpContext.RequestServices?.GetService<IAppSettings>(), ct));
+            await SingleUserMode.IsOnAsync(db, HttpContext.RequestServices?.GetService<IAppSettings>(), ct),
+            await UserNameVisibility.LoginNamesVisibleAsync(HttpContext.RequestServices?.GetService<IAppSettings>(), ct));
     }
 
     private async Task<IReadOnlyList<int>> RootFolderIdsAsync(MakiUser user, CancellationToken ct) =>

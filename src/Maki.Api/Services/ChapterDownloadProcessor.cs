@@ -5,10 +5,10 @@ using Maki.Api.Dtos;
 using Maki.Api.Hubs;
 using Maki.Api.Localization;
 using Maki.Core.ComicInfo;
+using Maki.Core.Configuration;
 using Maki.Core.Download;
 using Maki.Core.Entities;
 using Maki.Core.Http;
-using Maki.Core.Images;
 using Maki.Core.Inbox;
 using Maki.Core.Naming;
 using Maki.Core.Notifications;
@@ -53,6 +53,7 @@ public class ChapterDownloadProcessor(
     ChapterFileQualityService quality,
     ILocalizer localizer,
     IUserLocaleResolver locales,
+    IAppSettings settings,
     ILogger<ChapterDownloadProcessor> logger)
 {
     /// <summary>A RateLimited row parked for a missing root folder, which no source's cooldown is about.</summary>
@@ -102,6 +103,19 @@ public class ChapterDownloadProcessor(
         var chapter = item.Chapter;
         var series = item.Series!;
         var rootFolder = series.RootFolder!;
+
+        // A plain download revived after its chapter got a file, or lost one on purpose, would overwrite
+        // or undo that. A file or removal older than the row is what the row was queued against.
+        if (item.HealthOperationId == null && item.UpgradeInfoJson == null &&
+            await db.Chapters.AnyAsync(c => c.Id == chapter.Id &&
+                ((c.ChapterFile != null && c.ChapterFile.DateAdded >= item.QueuedAt) ||
+                 (c.FileRemovedAt != null && c.FileRemovedAt >= item.QueuedAt)), ct))
+        {
+            await batches.DiscardAsync(series.Id, item.Id);
+            item.Status = QueueStatus.Cancelled;
+            await db.SaveChangesAsync(ct);
+            return DownloadOutcome.Settled;
+        }
 
         var workingDir = Path.Combine(paths.DownloadCacheDir, item.Id.ToString());
 
@@ -215,7 +229,7 @@ public class ChapterDownloadProcessor(
                     return await ProcessAsync(item.Id, triedMappingIds, ct);
                 }
 
-                await FailAsync(item, DownloadFailureReason.SourceError, ct, permanent: true,
+                await FailAsync(item, DownloadFailureReason.ServesPreviews, ct, permanent: true,
                     detail: $"The only source left serves previews ({pageCount} pages)");
                 return DownloadOutcome.Settled;
             }
@@ -331,15 +345,7 @@ public class ChapterDownloadProcessor(
                     tmpCbz, workingDir, ct);
             }
 
-            // Converted before the lock, since it is the slow part. The pages as downloaded are measured
-            // first: that is the copy the source served, and what quality scoring must go on seeing.
-            string? acquiredFormat = null;
-            var conversion = await ConvertPackagedAsync(item, tmpCbz, ct);
-            if (conversion is { Result.Outcome: ArchiveConversionOutcome.Converted })
-            {
-                acquiredFormat = ChapterFileMeasurer.MeasureArchive(tmpCbz, ChapterFileMeasureService.SampleSize, ct).ImageFormat;
-                File.Move(conversion.Value.Path, tmpCbz, overwrite: true);
-            }
+            var queueConversion = await ConversionOnAsync(ct);
 
             // Released right after the save below; the using covers every other way out.
             using var seriesLock = await SeriesLocks.SeriesAsync(series.Id, ct);
@@ -347,6 +353,18 @@ public class ChapterDownloadProcessor(
             // The series was loaded when the item was claimed. A rename or move that held the lock
             // meanwhile changed where the folder is, so the path is built from what it is now.
             await db.Entry(series).ReloadAsync(ct);
+
+            // Archived between the claim and the lock: the archive's queue sweep may have missed this
+            // row, and a file placed now would land in a series that no longer takes downloads.
+            if (series.ArchivedAt is not null)
+            {
+                await batches.DiscardAsync(series.Id, item.Id);
+                item.Status = QueueStatus.Cancelled;
+                await db.SaveChangesAsync(CancellationToken.None);
+                TryDeleteDirectory(workingDir);
+                return DownloadOutcome.Settled;
+            }
+
             if (series.RootFolderId != rootFolder.Id)
             {
                 rootFolder = await db.RootFolders.FindAsync([series.RootFolderId], ct) ?? rootFolder;
@@ -413,10 +431,7 @@ public class ChapterDownloadProcessor(
             // pages were validated moments ago and a full second read would only repeat that work.
             quality.Stamp(chapterFile, finalPath, source.Kind, group,
                 ChapterFileMeasureService.SampleSize, CancellationToken.None);
-            if (conversion is { } converted)
-            {
-                PageConversionOptions.Apply(chapterFile, converted.Result, acquiredFormat, DateTime.UtcNow);
-            }
+            chapterFile.ConversionQueuedAtUtc = queueConversion ? DateTime.UtcNow : null;
 
             await SourceQualitySamples.RecordAsync(db, mapping, chapter.Id, SourceQualityOrigin.Download,
                 chapterFile.PageCount, chapterFile.MedianWidth, chapterFile.MedianHeight, chapterFile.QualitySize,
@@ -440,6 +455,10 @@ public class ChapterDownloadProcessor(
             await db.SaveChangesAsync(CancellationToken.None);
             await ChapterPartCoverageService.UnwantCoveredPartsAsync(db, series.Id, CancellationToken.None);
             seriesLock.Dispose();
+            if (queueConversion)
+            {
+                PageConversionWorker.Signal();
+            }
 
             await AnnounceImportAsync(item, chapter, series, rootFolder, mapping, ct);
 
@@ -467,6 +486,7 @@ public class ChapterDownloadProcessor(
         }
         catch (HttpRequestException hre) when (hre.StatusCode is HttpStatusCode.NotFound)
         {
+            BlameSource(item, usedMapping, DownloadFailureReason.SourceError);
             if (item.HealthOperationId != null)
             {
                 await FailAsync(item, "error.download.approvedSourceNoPages", ct, detail: hre.Message);
@@ -491,19 +511,25 @@ public class ChapterDownloadProcessor(
         {
             logger.LogWarning("Queue item {Id}: {Source} wants a login or purchase for this chapter",
                 item.Id, usedMapping?.SourceName ?? "?");
+            BlameSource(item, usedMapping, DownloadFailureReason.NeedsPurchase);
             if (item.HealthOperationId == null && item.PreferredMappingId == null && item.UpgradeInfoJson == null &&
                 await FailOverAsync(item, chapter, usedMapping, triedMappingIds, workingDir, ct) is not null)
             {
                 return await ProcessAsync(item.Id, triedMappingIds, ct);
             }
 
-            await FailAsync(item, DownloadFailureReason.SourceError, ct, permanent: true, detail: ex.Message);
+            await FailAsync(item, DownloadFailureReason.NeedsPurchase, ct, permanent: true, detail: ex.Message);
             return DownloadOutcome.Settled;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Download failed for queue item {Id}", item.Id);
             var (key, detail) = DownloadFailureReason.Classify(ex);
+            if (SourceFailover.CountsAgainstSource(key))
+            {
+                BlameSource(item, usedMapping, key);
+            }
+
             if (SourceFailover.ShouldFailOver(key, item.RetryCount + 1, item.PreferredMappingId != null,
                     item.HealthOperationId != null, item.UpgradeInfoJson != null) &&
                 await FailOverAsync(item, chapter, usedMapping, triedMappingIds, workingDir, ct) is { } failedOverTo)
@@ -523,43 +549,29 @@ public class ChapterDownloadProcessor(
             if (tmpCbz is not null)
             {
                 TryDeleteFile(tmpCbz);
-                TryDeleteFile(ConvertedPath(tmpCbz));
             }
         }
     }
 
-    private static string ConvertedPath(string tmpCbz) => tmpCbz + ".converted";
+    /// <summary>
+    /// Whether page conversion is on. A placed file is then queued for <see cref="PageConversionWorker"/>
+    /// rather than converted here, so a worker slot never waits on an encode.
+    /// </summary>
+    private async Task<bool> ConversionOnAsync(CancellationToken ct) =>
+        (await PageConversionOptions.ReadAsync(db, ct)).Active is not null;
 
     /// <summary>
-    /// The packaged archive with its pages converted, written beside it, or null while conversion is
-    /// off or when it failed for a reason outside the pages (which leaves the chapter for the library
-    /// pass). A result other than Converted has nothing at the path.
+    /// Logs the failure against the mapping that caused it, before a failover moves the row off it.
+    /// Saved with the row's next save.
     /// </summary>
-    private async Task<(string Path, ArchiveConversionResult Result)?> ConvertPackagedAsync(
-        DownloadQueueItem item, string tmpCbz, CancellationToken ct)
+    private void BlameSource(DownloadQueueItem item, SourceMapping? usedMapping, string key)
     {
-        if (await PageConversionOptions.LoadAsync(db, ct) is not { } settings)
+        if ((usedMapping?.Id ?? item.SourceMappingId) is { } mappingId)
         {
-            return null;
-        }
-
-        var target = ConvertedPath(tmpCbz);
-        try
-        {
-            var result = await ArchivePageConverter.ConvertAsync(tmpCbz, target, settings, ct);
-            if (result.Outcome == ArchiveConversionOutcome.Converted)
+            db.SourceFailures.Add(new SourceFailure
             {
-                logger.LogDebug("Converted the pages of queue item {Id}: {Before} to {After} bytes",
-                    item.Id, result.SourceBytes, result.ResultBytes);
-            }
-
-            return (target, result);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "Could not convert the pages of queue item {Id}; keeping them as downloaded", item.Id);
-            TryDeleteFile(target);
-            return null;
+                SourceMappingId = mappingId, SeriesId = item.SeriesId, ErrorKey = key, OccurredAtUtc = DateTime.UtcNow
+            });
         }
     }
 
@@ -693,10 +705,20 @@ public class ChapterDownloadProcessor(
         // protects, so it happens before the lock is taken. The target is judged again under it.
         var measurement = ChapterFileMeasurer.MeasureArchive(tmpCbz, 0, ct);
         var size = new FileInfo(tmpCbz).Length;
-        var conversion = await ConvertPackagedAsync(item, tmpCbz, ct);
-        var placed = conversion is { Result.Outcome: ArchiveConversionOutcome.Converted } ? conversion.Value.Path : tmpCbz;
+        var queueConversion = await ConversionOnAsync(ct);
 
         using var seriesLock = await SeriesLocks.SeriesAsync(series.Id, ct);
+
+        // Archived between the claim and the lock, as on the placement path.
+        if (await db.Series.Where(s => s.Id == series.Id).Select(s => s.ArchivedAt).FirstOrDefaultAsync(ct) is not null)
+        {
+            await batches.DiscardAsync(series.Id, item.Id);
+            item.Status = QueueStatus.Cancelled;
+            await db.SaveChangesAsync(CancellationToken.None);
+            TryDeleteFile(tmpCbz);
+            TryDeleteDirectory(workingDir);
+            return DownloadOutcome.Settled;
+        }
 
         // The chapter was read when the item started, long before the lock: a link made since is
         // only visible after a reload.
@@ -717,6 +739,15 @@ public class ChapterDownloadProcessor(
         {
             return await RejectUpgradeAsync(item, chapter, series, mapping, sourceChapterId, tmpCbz, workingDir, info,
                 UpgradeReasons.UnsupportedFile, after: null, info.ProfileId, info.ProfileVersion, null, null, null, ct);
+        }
+
+        // The scan leaves these alone; this catches one queued before the chapter was read. Not
+        // remembered, so the copy is a candidate again if the chapter stops being due.
+        if ((await ReadFileCleanupService.PendingAsync(db, settings, series.Id, ct)).ContainsKey(chapter.Id))
+        {
+            return await RejectUpgradeAsync(item, chapter, series, mapping, sourceChapterId, tmpCbz, workingDir, info,
+                UpgradeReasons.RemovalScheduled, after: null, info.ProfileId, info.ProfileVersion, null, null, null, ct,
+                remember: false);
         }
 
         await SourceQualitySamples.RecordAsync(db, mapping, chapter.Id, SourceQualityOrigin.Download,
@@ -800,7 +831,7 @@ public class ChapterDownloadProcessor(
 
         try
         {
-            File.Move(placed, finalPath);
+            File.Move(tmpCbz, finalPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -847,11 +878,7 @@ public class ChapterDownloadProcessor(
         current.MedianHeight = measurement.MedianHeight;
         current.ImageFormat = measurement.ImageFormat;
         current.ResetConversion();
-        if (conversion is { } converted)
-        {
-            PageConversionOptions.Apply(current, converted.Result, measurement.ImageFormat, now);
-        }
-
+        current.ConversionQueuedAtUtc = queueConversion ? now : null;
         current.MeasuredAtUtc = now;
         current.ReplacedAtUtc = now;
         current.ReleaseName = null;
@@ -885,6 +912,10 @@ public class ChapterDownloadProcessor(
         item.NextAttempt = null;
         item.ClearError();
         await db.SaveChangesAsync(CancellationToken.None);
+        if (queueConversion)
+        {
+            PageConversionWorker.Signal();
+        }
 
         queue.ClearRateLimitBackoff(mapping.SourceName);
         await events.QueueUpdated(QueueItemDto.FromEntity(item, chapter, series, mapping.SourceName,
@@ -941,10 +972,10 @@ public class ChapterDownloadProcessor(
     private async Task<DownloadOutcome> RejectUpgradeAsync(
         DownloadQueueItem item, Chapter chapter, Series series, SourceMapping mapping, string sourceChapterId,
         string tmpCbz, string workingDir, UpgradeInfo info, string? reason, QualitySnapshot? after, int profileId,
-        int profileVersion, int? pageCount, int? width, int? score, CancellationToken ct)
+        int profileVersion, int? pageCount, int? width, int? score, CancellationToken ct, bool remember = true)
     {
         TryDeleteFile(tmpCbz);
-        if (!info.Force)
+        if (!info.Force && remember)
         {
             await UpgradeAttempts.UpsertAsync(db, chapter.Id, series.Id, mapping.Id, sourceChapterId, profileId,
                 profileVersion, reason ?? UpgradeReasons.UpgradeRejected, probed: true, pageCount, width, score, ct);
@@ -1001,6 +1032,7 @@ public class ChapterDownloadProcessor(
     {
         logger.LogWarning("Root folder {Path} is not available; queue item {Id} will try again later",
             rootFolder.Path, item.Id);
+        HealthWriteProbe.Shared.Expire();
         item.Status = QueueStatus.RateLimited;
         item.SetError(RootFolderUnavailableKey);
         item.NextAttempt = queue.NextRetryAttempt(1);
@@ -1109,7 +1141,7 @@ public class ChapterDownloadProcessor(
         }
         else
         {
-            item.SetError("error.download.rateLimited", new { source = sourceRegistry.Find(mapping.SourceName)?.DisplayName ?? mapping.SourceName });
+            item.SetError("error.download.rateLimited", new { source = mapping.SourceName });
         }
 
         await db.SaveChangesAsync(ct);
@@ -1168,13 +1200,16 @@ public class ChapterDownloadProcessor(
     /// for a whole series and has nowhere to put values.
     /// </param>
     /// <param name="permanent">
-    /// Nothing a retry could change: the row fails without a retry scheduled or counted, and
-    /// <see cref="DownloadQueueService.RequeueEligibleFailuresAsync"/> leaves it alone.
+    /// Nothing a retry could change: the row fails without a retry scheduled or counted. The automatic
+    /// retry only leaves it alone when <paramref name="key"/> is in
+    /// <see cref="DownloadQueueService.PermanentErrorKeys"/> or <see cref="DownloadQueueService.ManualRetryOnlyErrorKeys"/>;
+    /// any other key is picked up on the next sweep with its retry count unchanged, and so retried forever.
     /// </param>
     /// <param name="detail">What the source or the exception said, shown after the keyed reason.</param>
     private async Task FailAsync(
         DownloadQueueItem item, string key, CancellationToken ct, bool permanent = false, string? detail = null)
     {
+        if (key == DownloadFailureReason.Disk) HealthWriteProbe.Shared.Expire();
         item.Status = QueueStatus.Failed;
         item.SetError(key, detail: detail);
         if (permanent)

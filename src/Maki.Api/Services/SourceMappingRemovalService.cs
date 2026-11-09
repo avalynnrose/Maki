@@ -188,7 +188,7 @@ public class SourceMappingRemovalService(
     /// Chapters no remaining mapping supports that this removal still has no business deleting: ones
     /// the removed mapping never listed (a source delisted them, they were adopted from disk, or only
     /// a disabled mapping lists them) that hold a file from a source other than the removed one, or
-    /// somebody's reading state. The row going takes every user's progress and bookmarks with it.
+    /// somebody's reading state or notes. The row going takes every user's progress, bookmarks and notes with it.
     /// A chapter the removed mapping did list is its own to remove, as before.
     /// </summary>
     private async Task<HashSet<int>> KeptWithoutSupportAsync(
@@ -209,6 +209,11 @@ public class SourceMappingRemovalService(
             .Concat(await db.ReaderBookmarks.IgnoreQueryFilters()
                 .Where(b => b.SeriesId == seriesId)
                 .Select(b => b.ChapterId)
+                .Distinct()
+                .ToListAsync(ct))
+            .Concat(await db.ChapterNotes.IgnoreQueryFilters()
+                .Where(n => n.SeriesId == seriesId)
+                .Select(n => n.ChapterId)
                 .Distinct()
                 .ToListAsync(ct))
             .ToHashSet();
@@ -258,26 +263,11 @@ public class SourceMappingRemovalService(
         IReadOnlyCollection<Chapter> removedChapters,
         CancellationToken ct)
     {
+        var mappingId = mapping.Id;
         var removedIds = removedChapters.Select(c => c.Id).ToList();
-        var active = await db.DownloadQueue
-            .Where(q => q.Status != QueueStatus.Completed && q.Status != QueueStatus.Cancelled &&
-                        (q.SourceMappingId == mapping.Id ||
-                         (q.ChapterId != null && removedIds.Contains(q.ChapterId.Value))))
-            .ToListAsync(ct);
-
-        foreach (var item in active)
-        {
-            queue.CancelWork(item.Id);
-            await batches.DiscardAsync(item.SeriesId, item.Id);
-
-            if (item.Status is QueueStatus.Queued or QueueStatus.Failed or QueueStatus.RateLimited or QueueStatus.Resolving)
-            {
-                db.DownloadQueue.Remove(item);
-            }
-            else
-            {
-                item.Status = QueueStatus.Cancelled;
-            }
-        }
+        await QueueItemCancellation.CancelAsync(db, queue, batches,
+            q => q.SourceMappingId == mappingId ||
+                 (q.ChapterId != null && removedIds.Contains(q.ChapterId.Value)),
+            ct);
     }
 }

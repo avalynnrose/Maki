@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Group, Progress, Select, Stack, Text, Tooltip } from '@mantine/core'
-import { IconDeviceMobileOff, IconRefresh, IconTrash } from '@tabler/icons-react'
+import { IconDeviceMobileOff, IconRefresh, IconTrash } from '../../lib/icons'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { plural } from '@lingui/core/macro'
@@ -166,7 +166,7 @@ function OfflineControls() {
 
       <Select
         label={t`Keep upcoming chapters`}
-        description={t`For each series you are reading, saves the next unread chapters while online and removes them once read. Chapters you save yourself stay until you remove them.`}
+        description={t`Removed once read. Chapters you save yourself stay.`}
         data={keepOptions}
         value={keep === null ? null : String(keep)}
         disabled={keep === null}
@@ -336,7 +336,7 @@ function SavedSeriesGroup({
                 onClick={() => void removeChaptersOffline([record.chapterId])}
                 aria-label={t`Remove ${label} from this device`}
               >
-                <IconTrash size={15} />
+                <IconTrash size={16} />
               </ActionIcon>
             </Group>
           </Group>

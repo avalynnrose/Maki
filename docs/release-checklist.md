@@ -19,6 +19,8 @@ the owner.
 - Every browser step is done with the devtools console open (or, for an agent,
   `read_console_messages` after each page). A red console error on any page is a failure even if
   the page looks fine.
+- Run one test container at a time (the 4 GB Docker VM cannot hold several) and delete any `*-shm`
+  files from the config template before starting one.
 - After the run, read the Maki log in `{config}/logs/` and look at every `[ERR]` and `[WRN]` line
   written during the session. Anything that isn't explained by a deliberate failure test is a
   finding.
@@ -116,23 +118,23 @@ grows with the page number, so wrong page order is obvious in the reader.
 
 | Folder | What it tests | Expected |
 |---|---|---|
-| `Dandadan (2021)` | Plain CBZs, a decimal chapter no source lists, ComicInfo.xml in Ch.1 | Ch.1, 2 and 3 link. Dandadan has no chapter 2.5 anywhere, so Ch.2.5 stays on disk unlinked and the import row lists it as having no matching chapter |
+| `Dandadan (2021)` | Plain CBZs, a decimal chapter no source lists, ComicInfo.xml in Ch.1 | Ch.1, 2 and 3 link. Dandadan has no chapter 2.5 anywhere, so Ch.2.5 becomes its own chapter row built from the file |
 | `Chainsaw Man` | `.zip` | 3 chapters, placed as CBZ without a repack |
 | `Sousou no Frieren` | `.cbr`, romanised title | Matches Frieren, 3 chapters repacked to CBZ |
 | `Blue Period` | `.cb7`, `.7z`, `.cbt`, and a 7z named `.cbz` | 4 chapters, all real CBZ afterwards |
-| `Vagabond` | Folders of loose images | 2 volumes |
+| `Vagabond` | Folders of loose images whose page names carry chapter markers (`Vagabond v01 c001 p001.png`) | 2 volumes, built into CBZs that link to the chapters the page names mark (vol 1: chapters 1 and 2, vol 2: chapters 3 and 4) |
 | `Oyasumi Punpun` | `.pdf` | 2 volumes kept as PDF, 4 pages each |
 | `Spy x Family` | Ch.1 as both `.cbr` and `.cbz`, plus `.txt`/`.nfo` | 2 chapters, Ch.1 once, other files ignored |
 | `Berserk` | Ch.002 is a truncated archive | Ch.001 imports, the import row lists Ch.002 as unreadable, nothing crashes |
 | `ワンパンマン` | Non-ASCII folder and file names | Matches One-Punch Man, names survive the import |
 | `Totally Made Up Series 9999` | No catalogue match | Offers no match and can be left out |
-| `Empty Series Folder` | No comics | Listed with 0 comics, nothing to import |
+| `Empty Series Folder` | No comics | Skipped by the scan, so it is not listed |
 
 - [ ] **3.1** Scan `/import` from the Import page. Every row matches the table above.
 - [ ] **3.2** Import everything that matched. It finishes without errors and the series show up in
       the library with their chapters marked as on disk.
-- [ ] **3.3** In the run's `import` folder, every chapter is now a CBZ except the PDFs, and
-      unrelated files were left alone.
+- [ ] **3.3** In the run's `import` folder, every chapter has a CBZ, non-CBZ originals are left in
+      place next to the new CBZ, and unrelated files were left alone.
 - [ ] **3.4** Open one chapter of each kind in the reader (a repacked one, a loose-image volume, a
       PDF). Pages are in order.
 
@@ -157,8 +159,12 @@ grows with the page number, so wrong page order is obvious in the reader.
       a magnet-only result reaches the client. Then switch back to Prowlarr and check its indexer
       selection is still there.
 - [ ] **4.8** Page conversion, when the release touches images or the converter: under
-      **Settings → Library → Page conversion** pick WebP, download a chapter, and open the CBZ. JPEG
-      pages are WebP and PNG pages are lossless WebP. Repeat with AVIF. Run the library pass on a
+      **Settings → Library → Page conversion** pick WebP and download a chapter. The download
+      completes without waiting on the encode, the card shows it under New downloads, and within a
+      minute or so the CBZ has WebP pages for JPEG. PNG pages become lossless WebP only with **Keep PNG pages
+      lossless** on, otherwise they follow the chosen stop. Open a chapter in the
+      reader while it is still queued: it stays as downloaded until ten minutes after you stop
+      reading. Repeat with AVIF. Run the library pass on a
       small series: it shows what it saved, pausing and resuming works, and the originals are in
       `.maki-trash/<series id>/conv-*`. The chapter still opens in the reader.
 
@@ -170,11 +176,21 @@ Use a scratch series here: reaching a chapter's last page marks it read and adds
       the page strip all work.
 - [ ] **5.2** Switch paged, double-page, 1:1 and continuous scroll. Each renders correctly.
 - [ ] **5.3** Leave mid-chapter and reopen: it resumes on the right page.
-- [ ] **5.4** Finish the chapter. The end screen offers the next chapter, and the chapter now shows
-      as read on the series page and in **Continue reading** on Home.
+- [ ] **5.4** With **Auto-advance to next chapter** off, finish the chapter. The end screen offers the next
+      chapter, and the chapter now shows as read on the series page and in **Continue reading** on
+      Home. (With auto-next on, the reader goes straight into the next chapter instead, which is expected.)
 - [ ] **5.5** Incognito toggle: reading with it on writes no progress.
 - [ ] **5.6** Phone width (375px): the reader and the series page are usable, nothing overflows
       sideways.
+- [ ] **5.7** Enhance, when the release touches the reader or the enhance engine: in the settings
+      popover set **Enhance** to Always with **Balanced**. Paged, double-page and continuous scroll
+      each show sharper pages, including after a crop or a split. Switch to Light and Strong, then
+      Off, and the plain pages return. With Auto in a small window nothing is enhanced, and
+      maximised on a large monitor it is.
+- [ ] **5.8** Hold-to-compare: holding **H** shows the original page and releasing it brings the
+      enhanced one back. Holding the toolbar button does the same, and so does a touch hold.
+- [ ] **5.9** Save a chapter for offline with Enhance on, go offline and open it. Pages show,
+      enhanced by the browser method, and a server method falls back to Balanced. Nothing errors.
 
 ## 6. Library, Home, Discover, Stats [both]
 
@@ -227,6 +243,13 @@ Use a scratch series here: reaching a chapter's last page marks it read and adds
 - [ ] **7.11** Image formats, when the release touches NetVips or the image libraries: a chapter
       containing JPEG, PNG, WebP, AVIF and GIF pages opens in the reader and in the Health page
       preview, covers render for each, and none of them logs a loader error.
+- [ ] **7.12** Server upscaling, when the release touches the upscaler, the image libraries or the
+      Docker image: on a fresh container, start with an empty config folder and confirm the log is
+      clean. Under **Settings → Library → Server upscaling** enable the tier and a model. It
+      downloads and shows Ready. **Test speed** returns a time. Pick that model as the reader's
+      Method on a scratch series: pages show Balanced, then swap to the server result. Lower the
+      cache cap to 128 MB, page through several chapters, and `cache/upscale` stays under it.
+      **Clear cache** empties it. Repeat the model load on both `amd64` and `arm64` images.
 
 ## 8. Upgrade from the previous release
 
@@ -243,6 +266,13 @@ builds some on the old version first.
       are all intact.
 - [ ] **8.4** Queue another download on the upgraded instance and read it: the same flow still
       works end to end.
+- [ ] **8.5** If `EmbeddingModelProfile.Base` changed since the previous tag (its `Version`,
+      `Dimensions` or `PrebuiltTag`), the prebuilt index for it is published **before** the release
+      is tagged: `./distribution/publish-embeddings.ps1 -Cuda -Publish` uploads to the profile's
+      `PrebuiltTag`. Without it every upgraded install skips its old-model vectors at load and has
+      no semantic search or recommendations until an admin presses Build in settings, which is
+      hours on a CPU. On the upgraded instance the log then shows the prebuilt index installing a
+      few minutes after startup.
 
 ## 9. Release-specific
 
@@ -250,6 +280,24 @@ builds some on the old version first.
       once in the browser on the insecure origin. This is where most regressions show up.
 - [ ] **9.2** Anything new that copies to the clipboard, generates an id, or hashes in the browser
       gets tried on the insecure origin specifically.
+
+## 10. Native builds
+
+The `Native builds` workflow runs on the tag push, like the Docker one, and attaches its files to the
+GitHub release once that exists (it waits up to 90 minutes for it). A release candidate gets the
+same files, but installed copies never update to it: the tray only follows stable releases.
+
+- [ ] **10.1** The workflow is green, and the release carries the Windows setup and portable zip,
+      the Velopack feed (`releases.win.json`, `assets.win.json`, `RELEASES`, the `.nupkg` files)
+      and both Linux tarballs.
+- [ ] **10.2** **[manual]** On a Windows machine with the previous version installed, **Restart to
+      update** appears within a few hours (or after restarting the tray) and installs this one.
+      Settings > System > Updates shows the new version afterwards.
+- [ ] **10.3** **[manual]** A fresh install from the setup exe opens the browser, starts with
+      Windows, and only answers on localhost until network access is switched on.
+- [ ] **10.4** **[manual]** The setup exe installs into a folder picked on its folder page (say
+      `D:\Apps\Maki`), refuses a folder that already has other files in it, and the copy there
+      updates and uninstalls like a default one. Uninstalling leaves `%LOCALAPPDATA%\Maki` alone.
 
 ## Recording a run
 
