@@ -61,6 +61,7 @@ export const libraryHandlers: HttpHandler[] = [
     return HttpResponse.json({ updated: body.seriesIds.length })
   }),
 
+  http.get(api('/series/:id/language-fallback'), () => HttpResponse.json({ active: false, reason: null, language: null })),
   http.post(api('/series/:id/searchmissing'), () => HttpResponse.json({ queued: 3 })),
   http.post(api('/series/:id/refresh'), () => HttpResponse.json({})),
   http.post(api('/series/:id/refreshmetadata'), () => HttpResponse.json({})),
