@@ -225,6 +225,9 @@ public static class ImageCodec
     internal static VipsImage ThumbnailFile(string path, int width, int height) =>
         VipsImage.Thumbnail(path, width, height: height, size: Enums.Size.Force, noRotate: true);
 
+    internal static VipsImage ThumbnailBytes(byte[] bytes, int width, int height) =>
+        VipsImage.ThumbnailBuffer(bytes, width, height: height, size: Enums.Size.Force, noRotate: true);
+
     internal static VipsImage FromMemory(byte[] pixels, int width, int height, int bands) =>
         VipsImage.NewFromMemory(pixels, width, height, bands, Enums.BandFormat.Uchar);
 

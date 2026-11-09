@@ -17,6 +17,18 @@ public static class PerceptualHash
         // A 144x128 thumbnail first, so a JPEG shrinks while decoding instead of the whole page
         // existing as pixels; the aspect ratio does not matter, the hash squashes it anyway.
         using var thumb = ImageCodec.ThumbnailFile(path, 9 * Cell, 8 * Cell);
+        return OfThumbnail(thumb);
+    }
+
+    /// <summary>The same hash for a page already in memory, such as one read out of an archive.</summary>
+    public static ulong OfBytes(byte[] page)
+    {
+        using var thumb = ImageCodec.ThumbnailBytes(page, 9 * Cell, 8 * Cell);
+        return OfThumbnail(thumb);
+    }
+
+    private static ulong OfThumbnail(Image thumb)
+    {
         // Through 8-bit sRGB first: straight to greyscale, a 16-bit PNG would stay 16-bit.
         using var srgb = thumb.Colourspace(Enums.Interpretation.Srgb);
         using var grey = srgb.Colourspace(Enums.Interpretation.Bw);

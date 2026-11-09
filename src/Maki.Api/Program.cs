@@ -893,6 +893,7 @@ try
     builder.Services.AddScoped<FileRelinkPlanner>();
     builder.Services.AddSingleton<ChapterFileQualityService>();
     builder.Services.AddScoped<ChapterFileMeasureService>();
+    builder.Services.AddScoped<VolumeOverlapService>();
     builder.Services.AddScoped<PageConversionService>();
     builder.Services.AddSingleton<PageConversionWorker>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<PageConversionWorker>());
@@ -1321,6 +1322,17 @@ try
             .WithIdentity("chapter-file-measure-trigger")
             .StartAt(DateTimeOffset.UtcNow.AddMinutes(15))
             .WithSimpleSchedule(s => s.WithIntervalInHours(6).RepeatForever().WithMisfireHandlingInstructionFireNow()));
+
+        // Recycles chapter files a volume file in the same series already contains. Daily, after the
+        // measurements; each file moved can be restored from the recycle bin.
+        q.AddJob<Maki.Api.Jobs.VolumeOverlapJob>(j => j
+            .WithIdentity(Maki.Api.Jobs.VolumeOverlapJob.Key)
+            .StoreDurably());
+        q.AddTrigger(t => t
+            .ForJob(Maki.Api.Jobs.VolumeOverlapJob.Key)
+            .WithIdentity("volume-overlap-trigger")
+            .StartAt(DateTimeOffset.UtcNow.AddMinutes(30))
+            .WithSimpleSchedule(s => s.WithIntervalInHours(24).RepeatForever().WithMisfireHandlingInstructionFireNow()));
 
         // Digests chapter files so KOReader's progress sync can name them. Does nothing while no user
         // has the OPDS catalogue on; a sync for an unknown document also fires it.
