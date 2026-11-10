@@ -58,4 +58,21 @@ public class VolumeOverlapTests
 
         Assert.False(VolumeOverlap.IsCovered(volume, volume));
     }
+
+    [Fact]
+    public void A_bundle_of_many_volumes_is_not_a_volume()
+    {
+        var bundle = Pages(Enumerable.Range(1, 8000).ToArray());
+        var chapter = Pages(Enumerable.Range(1, 40).ToArray());
+
+        Assert.False(VolumeOverlap.IsCovered(chapter, bundle));
+    }
+
+    [Fact]
+    public void A_volume_at_the_upper_end_still_counts()
+    {
+        var volume = Pages(Enumerable.Range(1, VolumeOverlap.MaxVolumePages).ToArray());
+
+        Assert.True(VolumeOverlap.IsCovered(Pages(Enumerable.Range(10, 30).ToArray()), volume));
+    }
 }

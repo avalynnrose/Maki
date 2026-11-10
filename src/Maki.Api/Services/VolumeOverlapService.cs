@@ -39,8 +39,13 @@ public class VolumeOverlapService(
             .Select(g => g.Key)];
     }
 
+    /// <summary>
+    /// A volume by its name, including a source's "(Volume) title（２）" label. A file like that is never
+    /// treated as a chapter, so a second copy of a volume is left alone.
+    /// </summary>
     private static bool IsVolume(string relativePath) =>
-        ReleaseNameParser.ParseFileName(relativePath) is { IsVolume: true };
+        ReleaseNameParser.ParseFileName(relativePath) is { IsVolume: true }
+        || relativePath.Contains("(Volume)", StringComparison.OrdinalIgnoreCase);
 
     /// <param name="apply">False only reports what would be recycled.</param>
     public async Task<List<Covered>> ReconcileAsync(int seriesId, bool apply, CancellationToken ct)
