@@ -28,6 +28,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 const emptyPage = { items: [], total: 0, page: 1, pageSize: 25 }
+const emptySummary = { active: 0, awaitingImport: 0, failed: 0 }
 
 /** The upgrades endpoints, pinned here so the tab's content does not depend on another area's mocks. */
 const upgradesData = [
@@ -52,6 +53,7 @@ export const EmptyQueue: Story = {
   parameters: {
     msw: [
       http.get(api('/queue'), () => HttpResponse.json(queuePage([]))),
+      http.get(api('/queue/summary'), () => HttpResponse.json(emptySummary)),
       http.get(api('/queue/history'), () => HttpResponse.json(emptyPage)),
     ],
   },
@@ -66,6 +68,7 @@ export const StatsStripHiddenAtZero: Story = {
   parameters: {
     msw: [
       http.get(api('/queue'), () => HttpResponse.json(queuePage([]))),
+      http.get(api('/queue/summary'), () => HttpResponse.json(emptySummary)),
       http.get(api('/queue/history'), () => HttpResponse.json(emptyPage)),
     ],
   },
