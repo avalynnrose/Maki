@@ -25,6 +25,13 @@ public static class VolumeOverlap
     /// </summary>
     public const int MinVolumePages = 100;
 
+    /// <summary>
+    /// A file with more pages than this is a bundle of several volumes, not one: it is no volume to
+    /// fold chapters into. A pack is split per volume at import, and chapter files are the usable form
+    /// until it is. A real volume runs about 150 to 350 pages.
+    /// </summary>
+    public const int MaxVolumePages = 400;
+
     public static double Share(IReadOnlyList<ulong> chapter, IReadOnlyList<ulong> volume)
     {
         if (chapter.Count == 0)
@@ -37,6 +44,6 @@ public static class VolumeOverlap
     }
 
     public static bool IsCovered(IReadOnlyList<ulong> chapter, IReadOnlyList<ulong> volume) =>
-        chapter.Count >= MinPages && volume.Count >= MinVolumePages && chapter.Count < volume.Count
+        chapter.Count >= MinPages && volume.Count is >= MinVolumePages and <= MaxVolumePages && chapter.Count < volume.Count
         && Share(chapter, volume) >= MinShare;
 }
