@@ -277,6 +277,24 @@ public sealed class SeriesProgressScopeTests : IDisposable
         Assert.Equal((5, 5, 3, 2), (row.ProgressTotal, row.ProgressHave, row.ProgressRead, row.ListedSpecials));
     }
 
+    [Fact]
+    public async Task A_row_numbered_like_a_date_is_not_the_highest_chapter()
+    {
+        var id = _db.SeedSeries("Dated");
+        using (var db = _db.NewContext())
+        {
+            db.Chapters.Add(new Chapter { SeriesId = id, Number = 12m });
+            db.Chapters.Add(new Chapter { SeriesId = id, Number = 20251030m });
+            db.SaveChanges();
+        }
+
+        using var scoped = _db.NewContext();
+        var counts = (await LibraryListRows.ChapterTalliesAsync(
+            scoped.Chapters.Where(c => c.SeriesId == id), ReadCounts.Read(scoped), CancellationToken.None))[id];
+
+        Assert.Equal((12.0, 12.0), (counts.HighestMain, counts.HighestKeptMain));
+    }
+
     private async Task<SeriesDto> Row(int user, int id, FakeAppSettings settings)
     {
         using var db = _db.NewContext(user);

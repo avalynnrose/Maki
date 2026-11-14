@@ -347,12 +347,12 @@ public sealed partial class SuwayomiSource(
     }
 
     /// <summary>
-    /// The extension's own number, or the one in the name when it sent none (-1). An extension that
+    /// The extension's own number, or the one in the name when it sent none (-1) or a date as one. An extension that
     /// numbers every part of chapter 9 as 9 gets the part's decimal too, or Normalize keeps one part.
     /// </summary>
     private static decimal? NumberOf(SuwayomiChapter chapter, ParsedChapter parsed)
     {
-        if (chapter.ChapterNumber < 0)
+        if (chapter.ChapterNumber is < 0 or >= (double)ChapterIdentity.MaxChapterNumber)
         {
             return parsed.NumberWithPart;
         }

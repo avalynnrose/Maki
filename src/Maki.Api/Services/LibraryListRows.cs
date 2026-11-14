@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using Maki.Api.Dtos;
 using Maki.Api.Jobs;
 using Maki.Core.Entities;
+using Maki.Core.Sources;
 using Maki.Core.Reading;
 using Maki.Data;
 using Maki.Metadata.MangaBaka;
@@ -406,8 +407,10 @@ internal static class LibraryListRows
                 g.Count(c => c.Number != null && c.Number != (decimal)(long)c.Number),
                 g.Count(c => c.Number != null && c.Number != (decimal)(long)c.Number &&
                              (c.ChapterFileId != null || c.FileRemovedAt != null)),
-                g.Where(c => c.Number != null && c.Number == (decimal)(long)c.Number).Max(c => (double?)(long)c.Number!.Value),
-                g.Where(c => c.Number != null && c.Number == (decimal)(long)c.Number &&
+                // A row numbered like a date, stored before sync dropped such numbers, is not the end of the series.
+                g.Where(c => c.Number != null && c.Number == (decimal)(long)c.Number && c.Number < ChapterIdentity.MaxChapterNumber)
+                    .Max(c => (double?)(long)c.Number!.Value),
+                g.Where(c => c.Number != null && c.Number == (decimal)(long)c.Number && c.Number < ChapterIdentity.MaxChapterNumber &&
                              (c.Wanted || c.ChapterFileId != null || c.FileRemovedAt != null))
                     .Max(c => (double?)(long)c.Number!.Value),
                 g.Count(c => !c.Wanted && c.ChapterFileId == null && c.FileRemovedAt == null),
@@ -441,7 +444,7 @@ internal static class LibraryListRows
             }
 
             var count = group.Count();
-            var whole = group.Where(c => c.Number is { } n && !Chapter.IsSpecial(n))
+            var whole = group.Where(c => c.Number is { } n && !Chapter.IsSpecial(n) && n < ChapterIdentity.MaxChapterNumber)
                 .Select(c => (double?)(long)c.Number!.Value)
                 .Max();
             tallies[group.Key] = t with

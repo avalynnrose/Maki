@@ -112,6 +112,20 @@ public class SuwayomiSourceTests
     }
 
     [Fact]
+    public async Task A_date_the_extension_sent_as_the_number_gives_way_to_the_name()
+    {
+        var h = new SuwayomiHarness();
+        h.MangaByUrl(7);
+        h.Refresh(SuwayomiHarness.Manga(7, SeriesUrl),
+            SuwayomiHarness.Chapter(1, "/c/1", "第4話", 20251030, sourceOrder: 1),
+            SuwayomiHarness.Chapter(2, "/c/2", "2025年11月号", 20251130, sourceOrder: 2));
+
+        var chapters = await h.Source().ListChaptersAsync(SeriesUrl);
+
+        Assert.Equal([null, 4m], chapters.Select(c => c.Number).ToArray());
+    }
+
+    [Fact]
     public async Task Parts_the_extension_numbered_as_the_whole_chapter_stay_apart()
     {
         var h = new SuwayomiHarness();

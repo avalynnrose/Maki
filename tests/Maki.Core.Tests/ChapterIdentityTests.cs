@@ -28,6 +28,18 @@ public class ChapterIdentityTests
         Assert.Equal("Extra", ChapterIdentity.Labelled(Unnumbered(" Extra ")).Title);
     }
 
+    [Fact]
+    public void A_date_sent_as_a_chapter_number_is_told_apart_by_its_label()
+    {
+        var dated = Unnumbered("2025/10/30") with { Number = 20251030m };
+
+        var labelled = ChapterIdentity.Labelled(dated);
+
+        Assert.Null(labelled.Number);
+        Assert.Equal("2025/10/30", labelled.Title);
+        Assert.Equal(9999m, ChapterIdentity.Labelled(Unnumbered("9999") with { Number = 9999m }).Number);
+    }
+
     [Theory]
     [InlineData("pt-br", "pt-BR")]
     [InlineData("pt-BR", "pt-br")]
