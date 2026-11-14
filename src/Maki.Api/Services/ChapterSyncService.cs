@@ -325,6 +325,7 @@ public class ChapterSyncService(
         }
 
         await db.SaveChangesAsync(ct);
+        await ChapterPartCoverageService.UnwantCoveredAsync(db, seriesId, ct);
 
         // Only a full sync reschedules. A partial one saw a few mappings, and the job would
         // otherwise treat the whole series as checked.

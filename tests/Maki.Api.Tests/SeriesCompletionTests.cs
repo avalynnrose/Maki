@@ -292,4 +292,25 @@ public sealed class SeriesCompletionTests : IDisposable
         Assert.Equal(ReadingStatus.Completed, Status(done));
         Assert.Equal(ReadingStatus.OnHold, Status(held));
     }
+
+    [Fact]
+    public async Task A_finished_series_held_partly_in_parts_completes_and_asks_nothing_about_the_whole_chapter()
+    {
+        var series = SeedSeries(3);
+        // Chapter 2 is on disk only as 2.1 and 2.2, so part coverage switched the whole 2 off.
+        var ids = SeedChapters(series, [1m, 2m, 2.1m, 2.2m, 3m], downloaded: true);
+        using (var db = _db.NewContext())
+        {
+            var two = db.Chapters.Single(c => c.Id == ids[1]);
+            two.ChapterFileId = null;
+            two.Wanted = false;
+            db.SaveChanges();
+        }
+
+        Read(series, ids.Where((_, i) => i != 1));
+        var check = _db.NewContext();
+
+        Assert.True(await SeriesCompletion.ReadThroughAsync(
+            check, _user, check.Series.Single(s => s.Id == series), unmonitorSpecials: true, default));
+    }
 }

@@ -79,6 +79,15 @@ public static class SeriesCompletion
                                        !seen.Any(p => p.ChapterId == c.Id)),
             })
             .FirstOrDefaultAsync(ct);
+        // A row the library already has in the other form (a whole chapter held in parts) is neither
+        // waiting nor switched off by the reader.
+        var covered = (await ChapterPartCoverageService.SplitRowsAsync(chapters, seen, ct))
+            .GetValueOrDefault(series.Id)?.Where(r => r.Covered).ToList() ?? [];
+        counts = counts is null ? null : counts with
+        {
+            Waiting = counts.Waiting - covered.Count(r => r.Wanted),
+            LeftOut = counts.LeftOut - covered.Count(r => !r.Wanted),
+        };
         if (counts is not { Kept: > 0, Waiting: 0 })
         {
             return null;
@@ -117,19 +126,22 @@ public static class SeriesCompletion
     {
         var seen = ReadCounts.SeenFor(db, userId).Where(p => p.SeriesId == series.Id);
         var read = await seen.CountAsync(ct);
+        var chapters = db.Chapters.IgnoreQueryFilters().Where(c => c.SeriesId == series.Id);
+        var parts = (await ChapterPartCoverageService.SplitRowsAsync(chapters, ReadCounts.SeenFor(db, userId), ct))
+            .GetValueOrDefault(series.Id)?.Where(r => r.IsPart).ToList() ?? [];
         var readSpecials = await seen.CountAsync(p => db.Chapters.IgnoreQueryFilters().Any(c =>
             c.Id == p.ChapterId && c.Number != null && c.Number != (decimal)(long)c.Number), ct);
+        readSpecials -= parts.Count(r => r.Read);
         if (reading is not null && !await seen.AnyAsync(p => p.ChapterId == reading.Id, ct))
         {
             read++;
-            if (Chapter.IsSpecial(reading.Number))
+            if (Chapter.IsSpecial(reading.Number) && parts.All(r => r.Id != reading.Id))
             {
                 readSpecials++;
             }
         }
 
-        var tallies = await LibraryListRows.ChapterTalliesAsync(
-            db.Chapters.IgnoreQueryFilters().Where(c => c.SeriesId == series.Id), ReadCounts.SeenFor(db, userId), ct);
+        var tallies = await LibraryListRows.ChapterTalliesAsync(chapters, ReadCounts.SeenFor(db, userId), ct);
         return LibraryListRows.SeriesLength(
             series, tallies.GetValueOrDefault(series.Id), read, readSpecials, unmonitorSpecials);
     }

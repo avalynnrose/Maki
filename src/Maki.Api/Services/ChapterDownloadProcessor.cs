@@ -459,6 +459,7 @@ public class ChapterDownloadProcessor(
             item.NextAttempt = null;
             item.ClearError();
             await db.SaveChangesAsync(CancellationToken.None);
+            await ChapterPartCoverageService.UnwantCoveredAsync(db, series.Id, CancellationToken.None);
             seriesLock.Dispose();
             if (queueConversion)
             {

@@ -49,6 +49,34 @@ public static class SeriesProgressScope
         new(wanted, had, read is { } r ? Math.Clamp(r, 0, wanted) : null, true, listedSpecials,
             switchedOff, Math.Max(0, listedSpecials - switchedOffSpecials));
 
+    /// <summary>
+    /// A chapter split into parts (4.1 to 4.4, <see cref="Maki.Core.Parsing.ChapterPartCoverage"/>) is
+    /// main story, not specials: its parts count as main chapters, and the whole chapter it stands for
+    /// counts toward the highest one listed. A row the library already has in the other form, never
+    /// had nor read, adds nothing, so a whole chapter 4 held as 4.1 to 4.4 neither reads as missing
+    /// nor, once part coverage switches it off, as skipped.
+    /// </summary>
+    internal static LibraryListRows.ChapterTallies CountParts(
+        LibraryListRows.ChapterTallies t, IReadOnlyList<ChapterPartCoverageService.SplitRow> rows, double? highestSpecial)
+    {
+        var parts = rows.Where(r => r.IsPart).ToList();
+        var dropped = rows.Where(r => r.Covered).ToList();
+        var wholes = rows.Select(r => (double)r.Whole).DefaultIfEmpty().Max();
+        var keptWholes = rows.Where(r => r.IsPart && r.Kept).Select(r => (double?)r.Whole).Max();
+        return t with
+        {
+            Known = t.Known - dropped.Count,
+            Wanted = t.Wanted - dropped.Count(r => r.Wanted),
+            SwitchedOff = t.SwitchedOff - dropped.Count(r => !r.Wanted),
+            Specials = t.Specials - parts.Count,
+            SpecialsHad = t.SpecialsHad - parts.Count(r => r.HasFile || r.Removed),
+            SwitchedOffSpecials = t.SwitchedOffSpecials - parts.Count(r => !r.Kept),
+            HighestMain = rows.Count == 0 ? t.HighestMain : new[] { t.HighestMain, wholes }.Max(),
+            HighestKeptMain = new[] { t.HighestKeptMain, keptWholes }.Max(),
+            HighestSpecial = highestSpecial,
+        };
+    }
+
     public static bool CountsSpecials(NewChapterMonitorMode mode, bool unmonitorSpecials) =>
         !unmonitorSpecials && mode != NewChapterMonitorMode.MainOnly;
 

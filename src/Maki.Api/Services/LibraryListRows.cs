@@ -418,8 +418,9 @@ internal static class LibraryListRows
         // Read apart and grouped here: Number is a decimal stored as REAL, which SQLite can't aggregate.
         var specials = await chapters
             .Where(c => c.Number != null && c.Number != (decimal)(long)c.Number)
-            .Select(c => new { c.SeriesId, c.Number })
+            .Select(c => new { c.Id, c.SeriesId, c.Number })
             .ToListAsync(ct);
+        var splitRows = await ChapterPartCoverageService.SplitRowsAsync(chapters, reads, ct);
         foreach (var group in specials.GroupBy(c => c.SeriesId))
         {
             if (tallies.TryGetValue(group.Key, out var t))
@@ -451,6 +452,19 @@ internal static class LibraryListRows
                 SwitchedOffSpecials = t.SwitchedOffSpecials - group.Count(c => Chapter.IsSpecial(c.Number)),
                 HighestKeptMain = new[] { t.HighestKeptMain, whole }.Max(),
             };
+        }
+
+        foreach (var (seriesId, rows) in splitRows)
+        {
+            if (tallies.TryGetValue(seriesId, out var t))
+            {
+                var partIds = rows.Where(r => r.IsPart).Select(r => r.Id).ToHashSet();
+                var highestSpecial = specials
+                    .Where(c => c.SeriesId == seriesId && !partIds.Contains(c.Id))
+                    .Select(c => (double?)c.Number!.Value)
+                    .Max();
+                tallies[seriesId] = SeriesProgressScope.CountParts(t, rows, highestSpecial);
+            }
         }
 
         return tallies;
